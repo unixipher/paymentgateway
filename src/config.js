@@ -11,7 +11,11 @@ const port = Number(process.env.PORT ?? 3000);
 
 export const config = {
   port,
-  baseUrl: (process.env.BASE_URL ?? `http://localhost:${port}`).replace(/\/$/, ''),
+  baseUrl: (
+    process.env.BASE_URL
+    || (process.env.VERCEL_PROJECT_PRODUCTION_URL && `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`)
+    || `http://localhost:${port}`
+  ).replace(/\/$/, ''),
   google: {
     clientId: required('GOOGLE_CLIENT_ID'),
     clientSecret: required('GOOGLE_CLIENT_SECRET'),

@@ -47,7 +47,7 @@ export const landing = () => layout('UPI Gateway', `
 export const errorPage = (message) => layout('Error', `
   <div class="card"><h1>Something went wrong</h1><p>${esc(message)}</p><a href="/">Back</a></div>`);
 
-export function dashboard({ merchant, orders, emails, baseUrl }) {
+export function dashboard({ merchant, orders, baseUrl }) {
   const orderRows = orders.map((o) => {
     const status = orderStatus(o);
     return `<tr>
@@ -60,10 +60,6 @@ export function dashboard({ merchant, orders, emails, baseUrl }) {
       <td>${time(o.createdAt)}</td>
     </tr>`;
   }).join('');
-
-  const emailRows = emails.map((e) => `<tr>
-    <td>${time(e.receivedAt)}</td><td>${esc(e.fromAddr)}</td><td>${esc(e.subject)}</td><td>${esc(e.verdict)}</td>
-  </tr>`).join('');
 
   return layout('Dashboard · UPI Gateway', `
     <div class="card row" style="justify-content:space-between;align-items:center">
@@ -105,18 +101,6 @@ export function dashboard({ merchant, orders, emails, baseUrl }) {
       <div class="table-wrap"><table>
         <tr><th>Order</th><th>Amount</th><th>Status</th><th>UTR</th><th>Payer</th><th>Note</th><th>Created</th></tr>
         ${orderRows || '<tr><td colspan="7" class="muted">No orders yet</td></tr>'}
-      </table></div>
-    </div>
-
-    <div class="card" id="emails">
-      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:12px">
-        <h2 style="margin:0">Bank emails seen</h2>
-        <form method="post" action="/scan"><button class="secondary">Scan last 3 days</button></form>
-      </div>
-      <p class="muted">Use this to check that your bank's alerts are recognised. Emails are only fetched from known bank domains.</p>
-      <div class="table-wrap"><table>
-        <tr><th>Received</th><th>From</th><th>Subject</th><th>Result</th></tr>
-        ${emailRows || '<tr><td colspan="4" class="muted">Nothing scanned yet</td></tr>'}
       </table></div>
     </div>
 

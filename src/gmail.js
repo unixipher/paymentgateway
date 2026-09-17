@@ -140,10 +140,11 @@ export async function safePoll(merchant, sinceMs) {
 }
 
 // Only merchants with open orders are polled, starting from their oldest open order.
-async function merchantsToPoll(now) {
+async function merchantsToPoll(now, merchantId) {
   const open = await prisma.order.groupBy({
     by: ['merchantId'],
     where: {
+      ...(merchantId && { merchantId }),
       status: 'pending',
       OR: [
         { expiresAt: { gte: new Date(now - config.graceMs) } },
@@ -159,6 +160,7 @@ async function merchantsToPoll(now) {
   return merchants.map((merchant) => ({ merchant, since: oldestOpen.get(merchant.id) - config.clockSkewMs }));
 }
 
+// Long-running server: check Gmail on a timer.
 export function startPoller() {
   let running = false;
   const tick = async () => {
@@ -174,4 +176,21 @@ export function startPoller() {
   };
   setInterval(tick, config.pollIntervalMs);
   void tick();
+}
+
+// Serverless (Vercel): there is no timer, so order status checks trigger the Gmail check instead.
+// The conditional update lets only one request per interval through, across all function instances.
+export async function pollIfDue(merchantId) {
+  const now = Date.now();
+  const claimed = await prisma.merchant.updateMany({
+    where: {
+      id: merchantId,
+      refreshToken: { not: null },
+      OR: [{ lastPolledAt: null }, { lastPolledAt: { lt: new Date(now - config.pollIntervalMs) } }],
+    },
+    data: { lastPolledAt: new Date(now) },
+  });
+  if (!claimed.count) return;
+  const [due] = await merchantsToPoll(now, merchantId);
+  if (due) await safePoll(due.merchant, due.since);
 }

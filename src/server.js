@@ -3,11 +3,12 @@ import QRCode from 'qrcode';
 import { config } from './config.js';
 import { encrypt, randomId, sign, unsign } from './crypto.js';
 import { prisma } from './db.js';
-import { exchangeCode, googleAuthUrl, safePoll, startPoller } from './gmail.js';
-import { HttpError, claimUtr, createOrder, getOrder, listOrders, publicOrder, upiLink } from './orders.js';
+import { exchangeCode, googleAuthUrl, pollIfDue, startPoller } from './gmail.js';
+import { HttpError, claimUtr, createOrder, getOrder, listOrders, orderStatus, publicOrder, upiLink } from './orders.js';
 import * as views from './views.js';
 
 const SESSION_MS = 7 * 24 * 60 * 60_000;
+const ON_VERCEL = Boolean(process.env.VERCEL);
 const cookieOptions = { httpOnly: true, sameSite: 'lax', secure: config.baseUrl.startsWith('https://') };
 
 const app = express();
@@ -48,11 +49,7 @@ async function requireApiAuth(req, res, next) {
 app.get('/', async (req, res) => {
   const merchant = await sessionMerchant(req);
   if (!merchant) return res.send(views.landing());
-  const [orders, emails] = await Promise.all([
-    listOrders(merchant.id, 30),
-    prisma.gmailMessage.findMany({ where: { merchantId: merchant.id }, orderBy: { receivedAt: 'desc' }, take: 30 }),
-  ]);
-  res.send(views.dashboard({ merchant, orders, emails, baseUrl: config.baseUrl }));
+  res.send(views.dashboard({ merchant, orders: await listOrders(merchant.id, 30), baseUrl: config.baseUrl }));
 });
 
 app.get('/auth/google', (req, res) => {
@@ -108,12 +105,6 @@ app.post('/orders/test', requireLogin, async (req, res) => {
   res.redirect(`/pay/${order.id}`);
 });
 
-app.post('/scan', requireLogin, async (req, res) => {
-  if (!req.merchant.refreshToken) throw new HttpError(400, 'Gmail access has expired, sign in again');
-  await safePoll(req.merchant, Date.now() - 3 * 24 * 60 * 60_000);
-  res.redirect('/#emails');
-});
-
 // ---- Payment page ----
 
 app.get('/pay/:id', async (req, res) => {
@@ -138,14 +129,22 @@ app.get('/api/orders', requireApiAuth, async (req, res) => {
   res.json((await listOrders(req.merchant.id)).map(publicOrder));
 });
 
+// On serverless hosts these status checks (the payment page polls every few seconds) are what trigger Gmail checks.
+async function refreshIfPending(order) {
+  if (!ON_VERCEL || orderStatus(order) !== 'pending') return order;
+  await pollIfDue(order.merchantId);
+  return getOrder(order.id);
+}
+
 app.get('/api/orders/:id', async (req, res) => {
   const order = await getOrder(req.params.id);
   if (!order) throw new HttpError(404, 'Order not found');
-  res.json(publicOrder(order));
+  res.json(publicOrder(await refreshIfPending(order)));
 });
 
 app.post('/api/orders/:id/claim', async (req, res) => {
-  res.json(publicOrder(await claimUtr(req.params.id, String(req.body?.utr ?? '').trim())));
+  const order = await claimUtr(req.params.id, String(req.body?.utr ?? '').trim());
+  res.json(publicOrder(await refreshIfPending(order)));
 });
 
 app.use((err, req, res, _next) => {
@@ -156,7 +155,12 @@ app.use((err, req, res, _next) => {
   res.status(status).send(views.errorPage(message));
 });
 
-app.listen(config.port, () => {
-  console.log(`UPI gateway running at ${config.baseUrl}`);
-  startPoller();
-});
+export default app;
+
+// On Vercel the exported app is invoked per request; locally (or on a VPS) run a normal server with the timer poller.
+if (!ON_VERCEL) {
+  app.listen(config.port, () => {
+    console.log(`UPI gateway running at ${config.baseUrl}`);
+    startPoller();
+  });
+}

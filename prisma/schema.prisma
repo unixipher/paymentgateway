@@ -1,8 +1,8 @@
 generator client {
   provider            = "prisma-client"
   output              = "../src/generated/prisma"
-  // Node 22.18+ runs the generated TypeScript directly, so there is no build step.
-  importFileExtension = "ts"
+  // Emitted as TypeScript, then converted to plain JS by scripts/prisma-to-js.js (see `npm run generate`).
+  importFileExtension = "js"
 }
 
 datasource db {
@@ -27,6 +27,8 @@ model Merchant {
   webhookSecret String   @map("webhook_secret")
   apiKey        String   @unique @map("api_key")
   createdAt     DateTime @default(now()) @map("created_at")
+  /// When Gmail was last checked on demand, so concurrent serverless requests only check once per interval.
+  lastPolledAt  DateTime? @map("last_polled_at")
 
   orders        Order[]
   bankTxns      BankTxn[]

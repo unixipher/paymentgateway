@@ -30,9 +30,9 @@ Accept UPI payments to your own UPI ID and confirm them automatically by reading
    npm run db:migrate     # creates the tables
    npm start              # http://localhost:3000
    ```
-5. Sign in, set your UPI ID on the dashboard, then click **Scan last 3 days** to check that your bank's emails are recognised. Create a ₹1 test order and pay it from another UPI account.
+5. Sign in, set your UPI ID on the dashboard, then create a ₹1 test order and pay it from another UPI account.
 
-If your bank's alerts show up as ignored, look at the reason in the "Bank emails seen" table. Add a missing sender domain with `TRUSTED_BANK_DOMAINS`, or adjust the regexes in [src/parser.js](src/parser.js) and add a sample to [test/parser.test.js](test/parser.test.js).
+If a payment isn't picked up, check the `verdict` column of the `gmail_messages` table (e.g. with `npx prisma studio`) to see why its email was ignored. Add a missing sender domain with `TRUSTED_BANK_DOMAINS`, or adjust the regexes in [src/parser.js](src/parser.js) and add a sample to [test/parser.test.js](test/parser.test.js).
 
 ## API
 

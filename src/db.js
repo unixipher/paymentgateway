@@ -1,5 +1,5 @@
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from './generated/prisma/client.ts';
+import { PrismaClient } from './generated/prisma/client.js';
 
 function adapter(databaseUrl) {
   if (!databaseUrl) throw new Error('Missing env var DATABASE_URL (see .env.example)');
