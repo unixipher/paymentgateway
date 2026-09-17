@@ -40,6 +40,60 @@ test('debit alerts are ignored', () => {
   assert.deepEqual(r, { ok: false, reason: 'debit alert' });
 });
 
+// Real Kotak811 / Kotak emails (names, accounts and references changed).
+const DISCLAIMER = 'The recipient if not the addressee should not use this message if erroneously received, and access and use of this e-mail in any manner by anyone other than the addressee is unauthorized.';
+
+test('Kotak811 UPI credit alert', () => {
+  const r = parseCreditAlert(`If you are unable to view the below e-mailer, please click here . Hi 811 Customer, You’ve received a
+    UPI Credit in your Kotak A/c (XX1111). Here's the summary of your transaction: Date: 17-Sep-26 Amount: ₹1.01
+    Sender: SOME PERSON UPI Reference Number (RRN): 626000000001 View balance: https://kotak811.com/mbapp/pay
+    Digitally yours, Kotak811. Please do not reply to this mail. ${DISCLAIMER}`);
+  assert.deepEqual(r, { ok: true, amountPaise: 101, utr: '626000000001', payerVpa: null });
+});
+
+test('Kotak811 failed UPI payment with refund is ignored', () => {
+  const r = parseCreditAlert(`Hi 811 Customer, Your UPI payment failed. Here's the summary of your transaction: Date: 17-Sep-26
+    Amount: ₹1.01 Debit A/c/Card Details: XX1111 Receiver: SOME PERSON UPI Reference Number (RRN): 626000000002
+    Refund has now been successfully credited back to your Kotak Account.`);
+  assert.deepEqual(r, { ok: false, reason: 'failed or reversed transaction' });
+});
+
+test('Kotak debit card purchase is not a credit', () => {
+  const r = parseCreditAlert(`Dear Customer, Your transaction of Rs.166.00 on SWIGGY using Kotak Bank Debit Card XX2222 on
+    16/09/2026 18:35:19 from your account XX1111 has been processed. The transaction reference No is 625000000003 &
+    Available balance is Rs.647.59. please do not share any senstitive information such as your Debit/ Credit/ Spendz
+    Card details. Regards Kotak Mahindra Bank. ${DISCLAIMER}`);
+  assert.equal(r.ok, false);
+});
+
+test('"received" in a legal footer does not make an email a credit', () => {
+  const r = parseCreditAlert(`Your transaction of Rs.86.00 on FLIPKART has been processed. Reference No is 625000000004. ${DISCLAIMER}`);
+  assert.deepEqual(r, { ok: false, reason: 'not a credit alert' });
+});
+
+test('failed, declined and reversed transactions are ignored', () => {
+  const failures = [
+    'Your UPI transaction of Rs.99.07 to be credited to your account **1234 has failed. UPI Ref No 425100005555.',
+    'UPI transaction FAILED: Rs 99.07 from rahul@okaxis. UTR 425100005556',
+    'Rs.99.07 credit to your a/c XX1234 was unsuccessful. UPI Ref 425100005557',
+    'The credit of INR 99.07 could not be processed. RRN 425100005558',
+    'Rs.99.07 has not been credited to your account. UPI Ref No 425100005559',
+    'Rs.99.07 has been credited to your account towards reversal of UPI txn 425100005560',
+    'Transaction declined. Rs.99.07 received from priya@ybl. UPI Ref:425100005561',
+    'Rs.99.07 will be credited back to your account. UTR 425100005562',
+  ];
+  for (const text of failures) assert.deepEqual(parseCreditAlert(text), { ok: false, reason: 'failed or reversed transaction' }, text);
+});
+
+test('a failure in the subject line rules out the email even if the body looks like a credit', () => {
+  const payload = {
+    mimeType: 'text/plain',
+    headers: [{ name: 'Subject', value: 'Alert: UPI transaction failed' }],
+    body: { data: Buffer.from('Rs.99.07 credited to a/c **1234. UPI Ref No 425100005563').toString('base64url') },
+  };
+  assert.deepEqual(parseCreditEmail(payload), { ok: false, reason: 'failed or reversed transaction' });
+});
+
 test('marketing mail mentioning money is ignored', () => {
   assert.equal(parseCreditAlert('You have received a special offer! Cashback up to Rs 500 on your credit card.').ok, false);
 });

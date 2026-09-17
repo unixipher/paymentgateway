@@ -1,4 +1,4 @@
 node_modules/
 .env
-data/
 client_secret*.json
+src/generated/

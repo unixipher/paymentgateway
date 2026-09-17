@@ -1,6 +1,6 @@
 import { config } from './config.js';
 import { decrypt } from './crypto.js';
-import { db } from './db.js';
+import { prisma } from './db.js';
 import { HttpError, formatRupees, recordBankTxn } from './orders.js';
 import { header, parseCreditEmail, verifySender } from './parser.js';
 
@@ -52,7 +52,7 @@ const accessTokens = new Map(); // merchant id -> { token, expiresAt }
 async function accessToken(merchant) {
   const cached = accessTokens.get(merchant.id);
   if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
-  const tokens = await tokenRequest({ grant_type: 'refresh_token', refresh_token: decrypt(merchant.refresh_token) });
+  const tokens = await tokenRequest({ grant_type: 'refresh_token', refresh_token: decrypt(merchant.refreshToken) });
   accessTokens.set(merchant.id, { token: tokens.access_token, expiresAt: Date.now() + tokens.expires_in * 1000 });
   return tokens.access_token;
 }
@@ -65,29 +65,36 @@ async function gmailGet(token, path, params) {
   return res.json();
 }
 
-function processMessage(merchant, msg) {
+async function processMessage(merchant, msg) {
   const headers = msg.payload?.headers ?? [];
   const receivedAt = Number(msg.internalDate);
-  const log = (verdict) => db.prepare(`
-    INSERT OR IGNORE INTO gmail_messages (id, merchant_id, received_at, from_addr, subject, verdict)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(msg.id, merchant.id, receivedAt, header(headers, 'From'), header(headers, 'Subject'), verdict);
+  const log = (verdict) => prisma.gmailMessage.createMany({
+    data: [{
+      merchantId: merchant.id,
+      gmailMessageId: msg.id,
+      receivedAt: new Date(receivedAt),
+      fromAddr: header(headers, 'From'),
+      subject: header(headers, 'Subject'),
+      verdict,
+    }],
+    skipDuplicates: true,
+  });
 
   const sender = verifySender(headers, config.trustedBankDomains);
   if (!sender.ok) {
-    log(`ignored: ${sender.reason}`);
+    await log(`ignored: ${sender.reason}`);
     return null;
   }
 
   const alert = parseCreditEmail(msg.payload);
   if (!alert.ok) {
-    log(`ignored: ${alert.reason}`);
+    await log(`ignored: ${alert.reason}`);
     return null;
   }
 
-  log(`credit ₹${formatRupees(alert.amountPaise)}${alert.utr ? `, UTR ${alert.utr}` : ''}`);
+  await log(`credit ₹${formatRupees(alert.amountPaise)}${alert.utr ? `, UTR ${alert.utr}` : ''}`);
   return recordBankTxn(merchant.id, {
-    gmailId: msg.id,
+    gmailMessageId: msg.id,
     amountPaise: alert.amountPaise,
     utr: alert.utr,
     payerVpa: alert.payerVpa,
@@ -101,13 +108,18 @@ export async function pollMerchant(merchant, sinceMs) {
   // Narrow the search to bank senders; verifySender still does the real check on each message.
   const fromFilter = config.trustedBankDomains.map((d) => `from:${d}`).join(' ');
   const list = await gmailGet(token, 'messages', { q: `after:${Math.floor(sinceMs / 1000)} {${fromFilter}}`, maxResults: 100 });
+  const ids = (list.messages ?? []).map((m) => m.id).reverse(); // oldest first
 
-  const seen = db.prepare('SELECT 1 FROM gmail_messages WHERE id = ?');
+  const seen = new Set((await prisma.gmailMessage.findMany({
+    where: { merchantId: merchant.id, gmailMessageId: { in: ids } },
+    select: { gmailMessageId: true },
+  })).map((m) => m.gmailMessageId));
+
   let paid = 0;
-  for (const { id } of (list.messages ?? []).reverse()) { // oldest first
-    if (seen.get(id)) continue;
+  for (const id of ids) {
+    if (seen.has(id)) continue;
     const msg = await gmailGet(token, `messages/${id}`, { format: 'full' });
-    if (processMessage(merchant, msg)) paid++;
+    if (await processMessage(merchant, msg)) paid++;
   }
   return paid;
 }
@@ -117,7 +129,7 @@ export async function safePoll(merchant, sinceMs) {
     return await pollMerchant(merchant, sinceMs);
   } catch (err) {
     if (err.code === 'invalid_grant') {
-      db.prepare('UPDATE merchants SET refresh_token = NULL WHERE id = ?').run(merchant.id);
+      await prisma.merchant.update({ where: { id: merchant.id }, data: { refreshToken: null } });
       accessTokens.delete(merchant.id);
       console.warn(`${merchant.email}: Google access expired or was revoked, they need to sign in again`);
     } else {
@@ -128,21 +140,34 @@ export async function safePoll(merchant, sinceMs) {
 }
 
 // Only merchants with open orders are polled, starting from their oldest open order.
+async function merchantsToPoll(now) {
+  const open = await prisma.order.groupBy({
+    by: ['merchantId'],
+    where: {
+      status: 'pending',
+      OR: [
+        { expiresAt: { gte: new Date(now - config.graceMs) } },
+        { claimedUtr: { not: null }, createdAt: { gte: new Date(now - config.claimWindowMs) } },
+      ],
+    },
+    _min: { createdAt: true },
+  });
+  const merchants = await prisma.merchant.findMany({
+    where: { id: { in: open.map((o) => o.merchantId) }, refreshToken: { not: null } },
+  });
+  const oldestOpen = new Map(open.map((o) => [o.merchantId, o._min.createdAt.getTime()]));
+  return merchants.map((merchant) => ({ merchant, since: oldestOpen.get(merchant.id) - config.clockSkewMs }));
+}
+
 export function startPoller() {
   let running = false;
   const tick = async () => {
     if (running) return;
     running = true;
     try {
-      const now = Date.now();
-      const merchants = db.prepare(`
-        SELECT m.*, MIN(o.created_at) AS oldest_open
-        FROM merchants m JOIN orders o ON o.merchant_id = m.id
-        WHERE m.refresh_token IS NOT NULL AND o.status = 'pending'
-          AND (o.expires_at + ? >= ? OR (o.claimed_utr IS NOT NULL AND o.created_at + ? >= ?))
-        GROUP BY m.id
-      `).all(config.graceMs, now, config.claimWindowMs, now);
-      for (const merchant of merchants) await safePoll(merchant, merchant.oldest_open - config.clockSkewMs);
+      for (const { merchant, since } of await merchantsToPoll(Date.now())) await safePoll(merchant, since);
+    } catch (err) {
+      console.error(`Poller failed: ${err.message}`);
     } finally {
       running = false;
     }

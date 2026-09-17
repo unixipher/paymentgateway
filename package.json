@@ -5,15 +5,23 @@
   "description": "UPI payment gateway that verifies payments by reading bank alert emails from Gmail",
   "type": "module",
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.18"
   },
   "scripts": {
+    "postinstall": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
     "start": "node --env-file=.env src/server.js",
     "dev": "node --env-file=.env --watch src/server.js",
-    "test": "node --test"
+    "test": "node --env-file-if-exists=.env --test"
   },
   "dependencies": {
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
     "express": "^5.1.0",
+    "pg": "^8.23.0",
     "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "prisma": "^7.10.0"
   }
 }

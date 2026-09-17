@@ -1,0 +1,99 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  // Node 22.18+ runs the generated TypeScript directly, so there is no build step.
+  importFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrderStatus {
+  pending
+  paid
+}
+
+/// A user who signed in with Google. Every other row belongs to exactly one merchant, is deleted with
+/// it, and is always queried with its merchantId, so one user can never see or match another's data.
+model Merchant {
+  id            String   @id
+  email         String   @unique
+  /// AES-256-GCM encrypted Google refresh token; null once Google access expires or is revoked.
+  refreshToken  String?  @map("refresh_token")
+  vpa           String?
+  displayName   String?  @map("display_name")
+  webhookUrl    String?  @map("webhook_url")
+  webhookSecret String   @map("webhook_secret")
+  apiKey        String   @unique @map("api_key")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  orders        Order[]
+  bankTxns      BankTxn[]
+  gmailMessages GmailMessage[]
+
+  @@map("merchants")
+}
+
+model Order {
+  id          String      @id
+  merchantId  String      @map("merchant_id")
+  /// What the merchant asked for.
+  basePaise   Int         @map("base_paise")
+  /// basePaise plus the unique paise offset the payer must pay.
+  amountPaise Int         @map("amount_paise")
+  note        String?
+  redirectUrl String?     @map("redirect_url")
+  /// Expiry is computed from expiresAt, so only pending/paid are stored.
+  status      OrderStatus @default(pending)
+  claimedUtr  String?     @map("claimed_utr")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  expiresAt   DateTime    @map("expires_at")
+  paidAt      DateTime?   @map("paid_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  txn      BankTxn?
+
+  @@index([merchantId, status, amountPaise])
+  @@index([merchantId, claimedUtr])
+  @@index([merchantId, createdAt])
+  @@map("orders")
+}
+
+/// A verified credit parsed from a bank alert email.
+model BankTxn {
+  id             String   @id @default(cuid())
+  merchantId     String   @map("merchant_id")
+  gmailMessageId String   @map("gmail_message_id")
+  amountPaise    Int      @map("amount_paise")
+  utr            String?
+  payerVpa       String?  @map("payer_vpa")
+  bankDomain     String   @map("bank_domain")
+  receivedAt     DateTime @map("received_at")
+  /// A bank credit can pay at most one order.
+  orderId        String?  @unique @map("order_id")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  order    Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@unique([merchantId, gmailMessageId])
+  /// The same UTR can never be counted twice.
+  @@unique([merchantId, utr])
+  @@map("bank_txns")
+}
+
+/// Every bank email the poller has looked at, and what it decided (shown on the dashboard).
+model GmailMessage {
+  merchantId     String   @map("merchant_id")
+  gmailMessageId String   @map("gmail_message_id")
+  receivedAt     DateTime @map("received_at")
+  fromAddr       String?  @map("from_addr")
+  subject        String?
+  verdict        String
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@id([merchantId, gmailMessageId])
+  @@index([merchantId, receivedAt])
+  @@map("gmail_messages")
+}

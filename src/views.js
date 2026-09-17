@@ -52,17 +52,17 @@ export function dashboard({ merchant, orders, emails, baseUrl }) {
     const status = orderStatus(o);
     return `<tr>
       <td><a href="/pay/${esc(o.id)}">${esc(o.id)}</a></td>
-      <td>₹${formatRupees(o.amount_paise)}</td>
+      <td>₹${formatRupees(o.amountPaise)}</td>
       <td class="status ${status}">${status}</td>
-      <td>${esc(o.paid_utr ?? (o.claimed_utr ? `${o.claimed_utr} (claimed)` : ''))}</td>
-      <td>${esc(o.payer_vpa ?? '')}</td>
+      <td>${esc(o.txn?.utr ?? (o.claimedUtr ? `${o.claimedUtr} (claimed)` : ''))}</td>
+      <td>${esc(o.txn?.payerVpa ?? '')}</td>
       <td>${esc(o.note ?? '')}</td>
-      <td>${time(o.created_at)}</td>
+      <td>${time(o.createdAt)}</td>
     </tr>`;
   }).join('');
 
   const emailRows = emails.map((e) => `<tr>
-    <td>${time(e.received_at)}</td><td>${esc(e.from_addr)}</td><td>${esc(e.subject)}</td><td>${esc(e.verdict)}</td>
+    <td>${time(e.receivedAt)}</td><td>${esc(e.fromAddr)}</td><td>${esc(e.subject)}</td><td>${esc(e.verdict)}</td>
   </tr>`).join('');
 
   return layout('Dashboard · UPI Gateway', `
@@ -71,7 +71,7 @@ export function dashboard({ merchant, orders, emails, baseUrl }) {
       <form method="post" action="/logout"><button class="secondary">Log out</button></form>
     </div>
 
-    ${merchant.refresh_token ? '' : `<div class="card alert">Gmail access has expired or was revoked, so payments
+    ${merchant.refreshToken ? '' : `<div class="card alert">Gmail access has expired or was revoked, so payments
       can't be verified. <a href="/auth/google">Sign in again</a>.</div>`}
 
     <div class="card">
@@ -81,11 +81,11 @@ export function dashboard({ merchant, orders, emails, baseUrl }) {
           <label>Your UPI ID (the account whose alerts reach this Gmail)
             <input name="vpa" value="${esc(merchant.vpa)}" placeholder="yourname@okhdfcbank" required></label>
           <label>Name shown to payers
-            <input name="display_name" value="${esc(merchant.display_name)}" maxlength="50"></label>
+            <input name="display_name" value="${esc(merchant.displayName)}" maxlength="50"></label>
         </div>
         <div class="row" style="margin-top:12px">
           <label>Webhook URL (optional)
-            <input name="webhook_url" value="${esc(merchant.webhook_url)}" placeholder="https://example.com/upi-webhook"></label>
+            <input name="webhook_url" value="${esc(merchant.webhookUrl)}" placeholder="https://example.com/upi-webhook"></label>
           <button>Save</button>
         </div>
       </form>
@@ -122,12 +122,12 @@ export function dashboard({ merchant, orders, emails, baseUrl }) {
 
     <div class="card">
       <h2>API</h2>
-      <p>API key: <code>${esc(merchant.api_key)}</code></p>
-      <p>Webhook secret: <code>${esc(merchant.webhook_secret)}</code></p>
+      <p>API key: <code>${esc(merchant.apiKey)}</code></p>
+      <p>Webhook secret: <code>${esc(merchant.webhookSecret)}</code></p>
       <pre>curl -X POST ${esc(baseUrl)}/api/orders \\
-  -H "Authorization: Bearer ${esc(merchant.api_key)}" \\
+  -H "Authorization: Bearer ${esc(merchant.apiKey)}" \\
   -H "Content-Type: application/json" \\
-  -d '{"amount": "99", "note": "Aparajita Game", "redirect_url": "https://example.com/thanks"}'</pre>
+  -d '{"amount": "99", "note": "Ice Cream", "redirect_url": "https://example.com/thanks"}'</pre>
       <p class="muted">Send the customer to <code>pay_url</code> from the response. When it's paid we POST
         <code>{"event":"order.paid","data":{...}}</code> to your webhook with header
         <code>x-signature: sha256=HMAC_SHA256(webhook_secret, raw body)</code>. You can also poll

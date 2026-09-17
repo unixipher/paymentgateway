@@ -49,19 +49,36 @@ const htmlToText = (html) => html
 
 // A 12 digit UPI reference (UTR/RRN), preferring one that is explicitly labelled.
 function findUtr(text) {
-  const labelled = text.match(/\b(?:UTR|RRN|ref(?:erence)?)(?:\s*(?:no|number|id))?\.?(?:\s*is)?\s*[:#-]?\s*(\d{12})\b/i);
+  // e.g. "UPI Ref No. 425112345678", "reference number is 425112345678", "Reference Number (RRN): 425112345678"
+  const labelled = text.match(/\b(?:UTR|RRN|ref(?:erence)?)(?:\s*(?:no|number|id))?\.?(?:\s*is)?[\s:#().-]*(\d{12})\b/i);
   if (labelled) return labelled[1];
   const slashed = text.match(/\bUPI\/(?:[A-Z0-9]+\/)?(\d{12})\b/i); // e.g. "Info: UPI/P2A/425112345678/NAME"
   if (slashed) return slashed[1];
   return /\b(UPI|IMPS)\b/i.test(text) ? text.match(/\b(\d{12})\b/)?.[1] ?? null : null;
 }
 
+// Failed, declined or reversed transactions still mention the amount and often the words
+// "credit"/"credited" ("could not be credited", "will be credited back"), so they must be ruled out first.
+const FAILED = new RegExp([
+  String.raw`\bfail(?:s|ed|ure)?\b`,
+  String.raw`\bunsuccessful(?:ly)?\b`,
+  String.raw`\b(?:declined|rejected|reversed|reversal|refund(?:ed)?|timed out)\b`,
+  String.raw`\bnot (?:been )?(?:credited|successful|processed|completed)\b`,
+  String.raw`\bcould not be (?:credited|processed|completed)\b`,
+  String.raw`\bcredited back\b`,
+].join('|'), 'i');
+
 export function parseCreditAlert(rawText) {
   const text = rawText.replace(/\s+/g, ' ');
-  if (/\b(debited|withdrawn|spent)\b/i.test(text)) return { ok: false, reason: 'debit alert' };
+  if (FAILED.test(text)) return { ok: false, reason: 'failed or reversed transaction' };
+  if (/\b(debited|withdrawn|spent)\b|\busing\b[\w ]{0,40}\b(debit|credit) card\b/i.test(text)) {
+    return { ok: false, reason: 'debit alert' };
+  }
 
-  const credited = /\b(credited|has credit|credit of)\b/i.test(text);
-  const received = /\b(received|deposited)\b/i.test(text);
+  const credited = /\b(credited|has credit|credit of|UPI credit)\b/i.test(text);
+  // Bare "received" is everywhere in legal footers ("if erroneously received"), so it only counts
+  // when it's about money: "Received Rs.250", "received a UPI Credit", "deposited in your a/c".
+  const received = /\b(received|deposited)\s+(?:a\s+)?(?:UPI\s+)?(?:₹|Rs\b|INR\b|credit\b|payment\b|money\b|in\b|into\b|to\b)/i.test(text);
   if (!credited && !received) return { ok: false, reason: 'not a credit alert' };
 
   const amount = text.match(/(?:₹|\bRs\.?|\bINR)\s*([\d,]+(?:\.\d{1,2})?)/i);
@@ -91,6 +108,10 @@ export function parseCreditEmail(payload) {
 
   // Some banks put junk like "view this mail in HTML" in the plain part, so fall back to the HTML.
   const candidates = [plain.join('\n'), htmlToText(html.join('\n'))].filter((t) => t.trim());
+  // A failure mentioned anywhere (subject, plain or HTML part) rules the whole email out.
+  if (FAILED.test([header(payload?.headers ?? [], 'Subject'), ...candidates].join(' '))) {
+    return { ok: false, reason: 'failed or reversed transaction' };
+  }
   let result = { ok: false, reason: 'empty body' };
   for (const text of candidates) {
     result = parseCreditAlert(text);

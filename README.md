@@ -22,13 +22,15 @@ Accept UPI payments to your own UPI ID and confirm them automatically by reading
    - Create a project and enable the **Gmail API**.
    - OAuth consent screen: User type **External**, publishing status **Testing**. Add your Gmail address under **Test users**.
    - Credentials → Create OAuth client ID → **Web application**. Authorised redirect URI: `http://localhost:3000/auth/google/callback`.
-3. Configure and run:
+3. **Postgres.** Any Postgres works; [Prisma Postgres](https://www.prisma.io/postgres) has a free tier. Copy its connection string.
+4. Configure and run (Node 22.18 or newer):
    ```bash
-   cp .env.example .env   # fill in client id/secret and SESSION_SECRET
-   npm install
+   cp .env.example .env   # fill in DATABASE_URL, Google client id/secret and SESSION_SECRET
+   npm install            # also generates the Prisma client
+   npm run db:migrate     # creates the tables
    npm start              # http://localhost:3000
    ```
-4. Sign in, set your UPI ID on the dashboard, then click **Scan last 3 days** to check that your bank's emails are recognised. Create a ₹1 test order and pay it from another UPI account.
+5. Sign in, set your UPI ID on the dashboard, then click **Scan last 3 days** to check that your bank's emails are recognised. Create a ₹1 test order and pay it from another UPI account.
 
 If your bank's alerts show up as ignored, look at the reason in the "Bank emails seen" table. Add a missing sender domain with `TRUSTED_BANK_DOMAINS`, or adjust the regexes in [src/parser.js](src/parser.js) and add a sample to [test/parser.test.js](test/parser.test.js).
 
@@ -38,7 +40,7 @@ If your bank's alerts show up as ignored, look at the reason in the "Bank emails
 curl -X POST http://localhost:3000/api/orders \
   -H "Authorization: Bearer <api key from dashboard>" \
   -H "Content-Type: application/json" \
-  -d '{"amount": "99", "note": "Aparajita Game", "redirect_url": "https://example.com/thanks"}'
+  -d '{"amount": "99", "note": "Ice Cream", "redirect_url": "https://example.com/thanks"}'
 ```
 
 | Endpoint | Auth | Purpose |
@@ -59,8 +61,16 @@ Webhook on payment: `POST <webhook_url>` with body `{"event":"order.paid","data"
 - Webhooks aren't retried, and there's no rate limiting on UTR claims.
 - Banks may restrict personal UPI IDs that receive lots of business payments.
 
+## Data
+
+The schema is in [prisma/schema.prisma](prisma/schema.prisma). Every signed-in Google account is a `Merchant`, and all of its orders, bank transactions and scanned emails reference it (deleted with it). Every query filters by that merchant, so one user's bank emails can never pay another user's orders. Unique amounts and "a UTR is counted once" are also per user.
+
+After changing the schema, create a migration with `npx prisma migrate dev --name <change>`, then commit the new folder in `prisma/migrations`.
+
 ## Tests
 
 ```bash
 npm test
 ```
+
+The parser tests need nothing. The order-matching tests use `DATABASE_URL` from `.env`, but run in a separate `gateway_test` schema that is dropped and rebuilt from the migrations on every run, so your real tables are untouched. Without `DATABASE_URL` they are skipped.
