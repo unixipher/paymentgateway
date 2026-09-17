@@ -37,7 +37,8 @@ Never put an API key in browser code. `/api/public/*` needs no token.
 | 403 | `forbidden` |
 | 404 | `not_found` |
 | 409 | `conflict`, `gmail_not_connected`, `merchant_not_configured` |
-| 410 | `gone` (order expired or cancelled) |
+| 410 | `gone` (order cancelled, or too old to claim) |
+| 422 | `payment_failed` (the submitted UTR belongs to a failed payment) |
 | 429 | `rate_limited` (see the `Retry-After` header, in seconds) |
 | 500 | `internal_error` |
 
@@ -138,7 +139,7 @@ Use an **API key** from the merchant's server, or a **session token** from the d
 ```json
 {
   "id": "ord_…", "object": "order",
-  "status": "pending",
+  "status": "pending", "failure_reason": null,
   "amount": "99.01", "amount_paise": 9901,
   "base_amount": "99.00", "base_amount_paise": 9900,
   "currency": "INR",
@@ -152,9 +153,9 @@ Use an **API key** from the merchant's server, or a **session token** from the d
 
 | `status` | Meaning |
 |---|---|
-| `pending` | Waiting for payment. |
+| `pending` | Waiting for payment: until `expires_at` (2 minutes by default, `ORDER_TTL_MINUTES`), plus 1 minute for the bank's email to arrive. If the payer submitted a UTR, the order stays `pending` for up to 24 hours. |
 | `paid` | A verified bank credit matched this order. `utr` is set. |
-| `expired` | No payment arrived in time (15 min by default, plus a 10 min grace period for late bank emails). If the payer submitted a UTR, the order stays `pending` for up to 24 hours. |
+| `failed` | No payment arrived in time. `failure_reason` is `payment_not_received`. The payer should be offered a new order. **Late payments:** if the bank email arrives up to 10 minutes after `expires_at`, the order still becomes `paid` and `order.paid` is sent, so don't release goods only on `failed`, and handle a `paid` that follows it (e.g. refund or fulfil). |
 | `cancelled` | Cancelled by the merchant. It will never be marked paid. |
 
 **Why `amount` differs from `base_amount`:** every open order gets a unique paise amount (₹99.01, ₹99.02, …), which is how a bank alert email is matched to exactly one order. The payer must pay `amount` exactly.
@@ -184,7 +185,7 @@ Responds `201` with the order. Send the payer to `checkout_url`.
 
 ### `GET /api/v1/orders`
 
-Paginated, newest first. Optional filter: `?status=pending|paid|expired|cancelled`.
+Paginated, newest first. Optional filter: `?status=pending|paid|failed|cancelled`.
 
 ### `GET /api/v1/orders/:id`
 
@@ -202,18 +203,18 @@ These endpoints are for the payer's checkout page, which is typically `/pay/:id`
 
 ```json
 {
-  "id": "ord_…", "object": "checkout", "status": "pending",
+  "id": "ord_…", "object": "checkout", "status": "pending", "failure_reason": null,
   "amount": "99.01", "amount_paise": 9901, "currency": "INR", "note": "Ice Cream",
   "payee": { "name": "Ice Cream Co", "vpa": "shop@okhdfcbank" },
   "upi_link": "upi://pay?pa=shop@okhdfcbank&pn=Ice%20Cream%20Co&am=99.01&cu=INR&tn=Ice%20Cream",
   "qr_url": "https://api.example.com/api/public/orders/ord_…/qr",
   "redirect_url": "https://shop.example/thanks",
   "utr": null, "utr_submitted": false,
-  "expires_at": "…", "paid_at": null
+  "created_at": "…", "expires_at": "…", "paid_at": null
 }
 ```
 
-**Poll this every 3–5 seconds while `status` is `pending`.** Each call also triggers a Gmail check (at most once per 15 s per merchant). That's how payments are detected when no cron job is running. Stop polling once the status is `paid`, `expired` or `cancelled`.
+**Poll this every 3–5 seconds while `status` is `pending`.** Each call also triggers a Gmail check (at most once per 15 s per merchant). That's how payments are detected when no cron job is running. Stop polling once the status is `paid` or `cancelled`. After `failed`, polling every 10 s for a few more minutes lets the page show a late payment.
 
 ### `GET /api/public/orders/:id/qr?size=512`
 
@@ -225,19 +226,21 @@ A PNG QR code of `upi_link` (`size` 128–1024), for use as `<img src={qr_url}>`
 { "utr": "425112345678" }
 ```
 
-The payer enters the 12-digit UPI reference number from their UPI app. Offer this when a payment isn't detected, for example because the payer paid a rounded amount. The response is the checkout object. The order becomes `paid` once the bank email with that UTR arrives and its amount equals the order's `amount` or `base_amount`. A payment that matches an order by exact amount always goes to that order, so a UTR copied from someone else can't take their payment. Limited to 10 per 10 minutes per IP and 5 per order.
+The payer enters the 12-digit UPI reference number from their UPI app. Offer this when a payment isn't detected, for example because the payer paid a rounded amount. The response is the checkout object. The order becomes `paid` once the bank email with that UTR arrives and its amount equals the order's `amount` or `base_amount`. A payment that matches an order by exact amount always goes to that order, so a UTR copied from someone else can't take their payment. If the bank has reported that UTR as a failed or reversed payment, the response is `422 payment_failed`. A `failed` order can still be claimed (within 24 hours). Limited to 10 per 10 minutes per IP and 5 per order.
 
 ### Suggested checkout page
 
 1. `GET /api/public/orders/:id`. If it's not `pending`, show the final state.
 2. Show `amount` prominently with the message "pay exactly this amount". Show `<img src={qr_url}>`, plus a button linking to `upi_link` for phones.
 3. Poll every 3 seconds. When the status becomes `paid`, show success and, if `redirect_url` is set, redirect to `redirect_url?order_id=<id>&status=paid`.
-4. After about a minute, show "Paid but still waiting?" with a UTR form that posts to `/claim`.
-5. Show a countdown to `expires_at`.
+4. When the countdown reaches zero, hide the QR code and show "checking with your bank". When the status becomes `failed`, show "Payment failed" (any debited money is refunded by the payer's bank) and a link back to `redirect_url?order_id=<id>&status=failed`.
+5. Offer "Payment failed in my UPI app?" while time remains, which shows the QR code again so the payer can retry.
+6. After about a minute, show "Paid but still waiting?" with a UTR form that posts to `/claim`.
+7. Show a countdown to `expires_at`.
 
 ## Webhooks
 
-When an order is paid, the backend sends a `POST` to the merchant's `webhook_url`:
+The backend sends a `POST` to the merchant's `webhook_url` when an order is paid (`order.paid`) and when it fails because no payment arrived in time (`order.failed`, sent once, within about a minute of failing when a cron runs or the checkout page is open):
 
 ```http
 POST /hooks/upi
@@ -252,7 +255,8 @@ X-Webhook-Signature: t=1789640000,v1=5f2c…
 - Any `2xx` response counts as delivered, and redirects are not followed. Respond within 10 seconds.
 - Failed deliveries are retried after 1 min, 5 min, 30 min, 2 h, 6 h, 12 h and 24 h (8 attempts in total). After that the delivery is marked `failed`, and you can retry it from the delivery log.
 - A delivery can arrive more than once. **Deduplicate on `X-Webhook-Id`** (or the order `id`).
-- Events are recorded in the same database transaction that marks the order paid, so they are never lost.
+- Events are recorded in the same database transaction as the change they report, so they are never lost.
+- `order.paid` can follow `order.failed` for the same order when the bank's email was late.
 
 **Verify every webhook** before trusting it. Compute an HMAC-SHA256 with your webhook secret over `<t>.<raw request body>`, compare it to `v1`, and reject timestamps more than 5 minutes old:
 
@@ -273,4 +277,4 @@ Use the **raw** body exactly as received, not re-serialised JSON.
 ## Operations
 
 - `GET /api/health` → `200 {"status":"ok","database":"up"}`, or `503` if the database is down.
-- `GET /api/cron/tick` with `Authorization: Bearer <CRON_SECRET>` checks Gmail for merchants with open orders, retries due webhooks, and deletes expired sessions, login codes and rate-limit rows. Run it every minute.
+- `GET /api/cron/tick` with `Authorization: Bearer <CRON_SECRET>` checks Gmail for merchants with open orders, sends `order.failed` webhooks, retries due webhooks, and deletes expired sessions, login codes and rate-limit rows. Run it every minute.

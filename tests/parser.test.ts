@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { rupeesToPaise } from '@/lib/money';
 import {
-  DEFAULT_TRUSTED_BANK_DOMAINS as TRUSTED, parseCreditAlert, parseCreditEmail, verifySender, type GmailHeader,
+  DEFAULT_TRUSTED_BANK_DOMAINS as TRUSTED, parseCreditAlert, parseCreditEmail, parseFailedPayment, verifySender, type GmailHeader,
 } from '@/lib/parser';
 
 const gmailAuth = (value: string): GmailHeader => ({ name: 'Authentication-Results', value });
@@ -139,5 +139,22 @@ describe('sender verification', () => {
     const domain = addr.split('@')[1];
     const auth = `mx.google.com; dkim=pass header.i=@${domain}; dmarc=pass header.from=${domain}`;
     expect(verifySender([gmailAuth(auth), from(addr)], TRUSTED).ok).toBe(false);
+  });
+});
+
+describe('failed payments (any bank)', () => {
+  test.each([
+    [`UPI Transaction Alert: Payment could not be processed Hi 811 Customer, Your UPI payment failed. Here's the summary of your
+      transaction: Date: 17-Sep-26 Amount: ₹1.01 Debit A/c/Card Details: XX1111 Receiver: SOME PERSON UPI Reference Number (RRN):
+      662600000002 Refund has now been successfully credited back to your Kotak Account.`, '662600000002', 101],
+    ['Your UPI transaction of Rs.99.07 to shop@okhdfcbank has failed. UPI Ref No 425100005555.', '425100005555', 9907],
+    ['Txn of INR 250.00 declined. Amount will be reversed. RRN: 425100005556', '425100005556', 25000],
+  ])('%s', (text, utr, amountPaise) => {
+    expect(parseFailedPayment(text)).toEqual({ ok: true, utr, amountPaise });
+  });
+
+  test('successful payments and failures without a reference are not failed payments', () => {
+    expect(parseFailedPayment('You have successfully made a UPI payment of INR 1.00. UPI Reference Number: 662609379427').ok).toBe(false);
+    expect(parseFailedPayment('Your UPI payment failed. Please try again.').ok).toBe(false);
   });
 });

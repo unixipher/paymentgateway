@@ -3,7 +3,7 @@ import { runAfterResponse } from '@/lib/background';
 import { prisma } from '@/lib/db';
 import { notFound } from '@/lib/errors';
 import { clientIp, handler, json } from '@/lib/http';
-import { orderState, publicOrderView } from '@/lib/orders';
+import { notifyFailedOrders, orderState, publicOrderView } from '@/lib/orders';
 import { pollIfDue } from '@/lib/poller';
 import { rateLimit } from '@/lib/rate-limit';
 
@@ -12,7 +12,7 @@ export const maxDuration = 60;
 /**
  * Checkout status for the payer's page, which polls this every few seconds. While the order is open,
  * each call also triggers a (throttled) Gmail check after the response is sent, so payments are
- * detected even without a cron job.
+ * detected (and order.failed webhooks sent) even without a cron job.
  */
 export const GET = handler(async (req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
   await rateLimit(`checkout-status:${clientIp(req)}`, 120, 60_000);
@@ -23,8 +23,13 @@ export const GET = handler(async (req: NextRequest, { params }: { params: Promis
   });
   if (!order) throw notFound('Order not found');
 
-  if (orderState(order) === 'pending') {
+  const state = orderState(order);
+  // A failed order can still be paid by a bank email that arrives late, so keep checking for a while.
+  if (state === 'pending' || state === 'failed') {
     runAfterResponse('on-demand gmail poll', () => pollIfDue(order.merchantId));
+  }
+  if (state === 'failed' && !order.failureNotifiedAt) {
+    runAfterResponse('order.failed webhooks', () => notifyFailedOrders(order.merchantId));
   }
   return json(publicOrderView(order, order.merchant));
 });

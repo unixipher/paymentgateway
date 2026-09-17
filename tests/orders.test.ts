@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, test } from 'vitest';
 import { prisma } from '@/lib/db';
-import { cancelOrder, claimUtr, createOrder, getOrder, listOrders, recordBankCredit } from '@/lib/orders';
+import {
+  cancelOrder, claimUtr, createOrder, getOrder, listOrders, merchantOrderView, notifyFailedOrders, recordBankCredit, recordFailedPayment,
+} from '@/lib/orders';
 import { hasDatabase } from './setup';
 import { createMerchant, credit, resetDatabase } from './helpers';
 
@@ -117,7 +119,7 @@ describe.skipIf(!hasDatabase)('order matching', () => {
     });
 
     expect((await listOrders(merchant.id, { limit: 10, state: 'paid' })).data.map((o) => o.id)).toEqual([paid.id]);
-    expect((await listOrders(merchant.id, { limit: 10, state: 'expired' })).data.map((o) => o.id)).toEqual(['ord_old']);
+    expect((await listOrders(merchant.id, { limit: 10, state: 'failed' })).data.map((o) => o.id)).toEqual(['ord_old']);
     const page1 = await listOrders(merchant.id, { limit: 2, state: 'pending' });
     const page2 = await listOrders(merchant.id, { limit: 2, state: 'pending', cursor: page1.nextCursor! });
     expect(page1.data).toHaveLength(2);
@@ -129,5 +131,56 @@ describe.skipIf(!hasDatabase)('order matching', () => {
     await expect(createOrder(await createMerchant({ vpa: null }), { amount: '10' })).rejects.toMatchObject({ code: 'merchant_not_configured' });
     await expect(createOrder(await createMerchant({ gmailRefreshToken: null }), { amount: '10' })).rejects.toMatchObject({ code: 'gmail_not_connected' });
     await expect(createOrder(await createMerchant(), { amount: '0.5' })).rejects.toMatchObject({ status: 400 });
+  });
+});
+
+describe.skipIf(!hasDatabase)('failed orders', () => {
+  beforeEach(resetDatabase);
+
+  const expire = (id: string, minutesAgo: number) =>
+    prisma.order.update({ where: { id }, data: { expiresAt: new Date(Date.now() - minutesAgo * 60_000) } });
+
+  test('an order fails after the payment window plus the checking minute, not before', async () => {
+    const merchant = await createMerchant();
+    const order = await createOrder(merchant, { amount: '10' });
+    expect(order.expiresAt.getTime() - order.createdAt.getTime()).toBe(3 * 60_000);
+
+    await expire(order.id, 0.5);
+    expect(merchantOrderView((await getOrder(order.id))!).status).toBe('pending');
+    await expire(order.id, 2);
+    expect(merchantOrderView((await getOrder(order.id))!)).toMatchObject({ status: 'failed', failure_reason: 'payment_not_received' });
+  });
+
+  test('a bank email that arrives late still pays a failed order', async () => {
+    const merchant = await createMerchant();
+    const order = await createOrder(merchant, { amount: '10' });
+    await expire(order.id, 5);
+    expect(merchantOrderView((await getOrder(order.id))!).status).toBe('failed');
+    expect((await recordBankCredit(merchant.id, credit(order.amountPaise, '425100000100')))?.status).toBe('paid');
+  });
+
+  test('order.failed is queued exactly once, and never for paid orders', async () => {
+    const merchant = await createMerchant({ webhookUrl: 'http://127.0.0.1:9/unreachable' });
+    const failed = await createOrder(merchant, { amount: '10' });
+    const paid = await createOrder(merchant, { amount: '10' });
+    await recordBankCredit(merchant.id, credit(paid.amountPaise, '425100000101'));
+    await expire(failed.id, 2);
+    await expire(paid.id, 2);
+
+    await Promise.all([notifyFailedOrders(), notifyFailedOrders(merchant.id)]);
+    await notifyFailedOrders();
+    const events = await prisma.webhookDelivery.findMany({ where: { merchantId: merchant.id }, orderBy: { createdAt: 'asc' } });
+    expect(events.map((e) => [e.event, e.orderId])).toEqual([['order.paid', paid.id], ['order.failed', failed.id]]);
+    expect(events[1]!.payload).toMatchObject({ type: 'order.failed', data: { order: { id: failed.id, status: 'failed' } } });
+  });
+
+  test('a UTR from a failed payment is rejected, and failed orders can still be claimed', async () => {
+    const merchant = await createMerchant();
+    const order = await createOrder(merchant, { amount: '10' });
+    await recordFailedPayment(merchant.id, { utr: '662600000001', amountPaise: 1001, gmailMessageId: 'failmsg', receivedAt: new Date() });
+    await expect(claimUtr(order.id, '662600000001')).rejects.toMatchObject({ status: 422, code: 'payment_failed' });
+
+    await expire(order.id, 5);
+    expect(merchantOrderView(await claimUtr(order.id, '425100000102')).status).toBe('pending');
   });
 });

@@ -106,7 +106,8 @@ export function parseCreditAlert(rawText: string): CreditAlert {
   return { ok: true, amountPaise, utr, payerVpa };
 }
 
-export function parseCreditEmail(payload: GmailPart | undefined): CreditAlert {
+/** The subject and readable body texts of an email: the plain part first, then the HTML part as text. */
+function emailTexts(payload: GmailPart | undefined) {
   const plain: string[] = [];
   const html: string[] = [];
   (function walk(part?: GmailPart) {
@@ -118,17 +119,46 @@ export function parseCreditEmail(payload: GmailPart | undefined): CreditAlert {
     }
     part.parts?.forEach(walk);
   })(payload);
-
   // Some banks put junk like "view this mail in HTML" in the plain part, so fall back to the HTML.
-  const candidates = [plain.join('\n'), htmlToText(html.join('\n'))].filter((t) => t.trim());
+  const bodies = [plain.join('\n'), htmlToText(html.join('\n'))].filter((t) => t.trim());
+  return { subject: header(payload?.headers ?? [], 'Subject'), bodies };
+}
+
+export function parseCreditEmail(payload: GmailPart | undefined): CreditAlert {
+  const { subject, bodies } = emailTexts(payload);
   // A failure mentioned anywhere (subject, plain or HTML part) rules the whole email out.
-  if (FAILED.test([header(payload?.headers ?? [], 'Subject'), ...candidates].join(' '))) {
+  if (FAILED.test([subject, ...bodies].join(' '))) {
     return { ok: false, reason: 'failed or reversed transaction' };
   }
   let result: CreditAlert = { ok: false, reason: 'empty body' };
-  for (const text of candidates) {
+  for (const text of bodies) {
     result = parseCreditAlert(text);
     if (result.ok) break;
   }
   return result;
+}
+
+export type FailedPaymentAlert = { ok: true; utr: string; amountPaise: number | null } | { ok: false };
+
+/**
+ * A failed, declined or reversed UPI payment, in any bank's wording: a failure phrase plus a 12 digit
+ * UPI reference. Used only to tell a payer that the reference they submitted belongs to a failed
+ * payment, never to mark anything paid, so it can afford to be broad.
+ */
+export function parseFailedPayment(rawText: string): FailedPaymentAlert {
+  const text = rawText.replace(/\s+/g, ' ');
+  if (!FAILED.test(text)) return { ok: false };
+  const utr = findUtr(text);
+  if (!utr) return { ok: false };
+  const amount = text.match(/(?:₹|\bRs\.?|\bINR)\s*([\d,]+(?:\.\d{1,2})?)/i)?.[1];
+  return { ok: true, utr, amountPaise: amount ? rupeesToPaise(amount.replace(/,/g, '')) : null };
+}
+
+export function parseFailedPaymentEmail(payload: GmailPart | undefined): FailedPaymentAlert {
+  const { subject, bodies } = emailTexts(payload);
+  for (const body of bodies) {
+    const result = parseFailedPayment(`${subject} ${body}`);
+    if (result.ok) return result;
+  }
+  return { ok: false };
 }

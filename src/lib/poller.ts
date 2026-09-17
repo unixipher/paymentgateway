@@ -7,8 +7,8 @@ import {
 } from './google';
 import { logger } from './logger';
 import { formatRupees } from './money';
-import { recordBankCredit } from './orders';
-import { header, parseCreditEmail, verifySender } from './parser';
+import { notifyFailedOrders, recordBankCredit, recordFailedPayment } from './orders';
+import { header, parseCreditEmail, parseFailedPaymentEmail, verifySender } from './parser';
 
 async function processMessage(merchant: Merchant, msg: GmailMessage) {
   const headers = msg.payload?.headers ?? [];
@@ -34,6 +34,12 @@ async function processMessage(merchant: Merchant, msg: GmailMessage) {
 
   const alert = parseCreditEmail(msg.payload);
   if (!alert.ok) {
+    const failed = parseFailedPaymentEmail(msg.payload);
+    if (failed.ok) {
+      await recordFailedPayment(merchant.id, { utr: failed.utr, amountPaise: failed.amountPaise, gmailMessageId: msg.id, receivedAt });
+      await log(`failed payment${failed.amountPaise ? ` ₹${formatRupees(failed.amountPaise)}` : ''}, UTR ${failed.utr}`);
+      return null;
+    }
     await log(`ignored: ${alert.reason}`);
     return null;
   }
@@ -122,11 +128,11 @@ export async function pollIfDue(merchantId: string): Promise<number> {
   return pollMerchant(merchant, since);
 }
 
-/** For the cron: every merchant with open orders that is due. */
+/** For the cron: every merchant with open orders that is due, then order.failed webhooks for orders that ran out of time. */
 export async function pollAllDue() {
   const merchants = [...(await merchantsWithOpenOrders(Date.now())).keys()];
   const paid = await Promise.all(merchants.map((id) => pollIfDue(id)));
-  return { merchants: merchants.length, paid: paid.reduce((a, b) => a + b, 0) };
+  return { merchants: merchants.length, paid: paid.reduce((a, b) => a + b, 0), failed: await notifyFailedOrders() };
 }
 
 /** Manual re-scan from the dashboard, e.g. to check that a bank's emails are recognised. */

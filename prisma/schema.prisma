@@ -44,6 +44,7 @@ model Merchant {
 
   orders            Order[]
   bankTxns          BankTxn[]
+  failedPayments    FailedPayment[]
   gmailMessages     GmailMessage[]
   sessions          Session[]
   loginCodes        LoginCode[]
@@ -94,9 +95,11 @@ model Order {
   redirectUrl    String?     @map("redirect_url")
   metadata       Json?
   idempotencyKey String?     @map("idempotency_key")
-  /// Expiry is computed from expiresAt; only pending/paid/cancelled are stored.
+  /// "failed" (no payment in time) is computed from expiresAt; only pending/paid/cancelled are stored.
   status         OrderStatus @default(pending)
   claimedUtr     String?     @map("claimed_utr")
+  /// Set once the order.failed webhook has been queued, so it is sent at most once.
+  failureNotifiedAt DateTime? @map("failure_notified_at")
   createdAt      DateTime    @default(now()) @map("created_at")
   updatedAt      DateTime    @default(now()) @updatedAt @map("updated_at")
   expiresAt      DateTime    @map("expires_at")
@@ -111,6 +114,7 @@ model Order {
   @@index([merchantId, status, amountPaise])
   @@index([merchantId, claimedUtr])
   @@index([merchantId, createdAt])
+  @@index([status, expiresAt])
   @@map("orders")
 }
 
@@ -135,6 +139,22 @@ model BankTxn {
   /// The same UTR can never be counted twice.
   @@unique([merchantId, utr])
   @@map("bank_txns")
+}
+
+/// A failed or reversed UPI payment reported in a bank email. Its reference number can never pay an
+/// order, so a payer who submits it is told the payment failed instead of waiting forever.
+model FailedPayment {
+  merchantId     String   @map("merchant_id")
+  utr            String
+  gmailMessageId String   @map("gmail_message_id")
+  amountPaise    Int?     @map("amount_paise")
+  receivedAt     DateTime @map("received_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@id([merchantId, utr])
+  @@map("failed_payments")
 }
 
 /// Every bank email the poller has looked at, and what it decided.

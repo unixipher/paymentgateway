@@ -39,7 +39,7 @@ export const POST = handler(async (req: NextRequest) => {
 });
 
 const listQuery = paginationQuery.extend({
-  status: z.enum(['pending', 'paid', 'cancelled', 'expired']).optional(),
+  status: z.enum(['pending', 'paid', 'failed', 'cancelled']).optional(),
 });
 
 export const GET = handler(async (req: NextRequest) => {

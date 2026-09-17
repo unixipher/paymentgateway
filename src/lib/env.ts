@@ -24,7 +24,8 @@ const schema = z.object({
   /** Required to call /api/cron/tick. Vercel Cron sends it automatically as a Bearer token. */
   CRON_SECRET: z.string().min(16).optional(),
   POLL_INTERVAL_SECONDS: z.coerce.number().int().min(5).default(15),
-  ORDER_TTL_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(15),
+  /** How long the payer has to pay. */
+  ORDER_TTL_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(2),
   TRUSTED_BANK_DOMAINS: csv,
 });
 
@@ -54,7 +55,9 @@ function load() {
     cronSecret: env.CRON_SECRET,
     pollIntervalMs: env.POLL_INTERVAL_SECONDS * 1000,
     orderTtlMs: env.ORDER_TTL_MINUTES * MINUTE,
-    /** Bank alert emails can arrive a few minutes after the money does. */
+    /** After the payment window closes, how long checkout keeps saying "checking with your bank" before the order is failed. */
+    verifyingMs: MINUTE,
+    /** Bank alert emails can arrive minutes after the money does, so a failed order can still be paid this long after expiry. */
     graceMs: 10 * MINUTE,
     /** How long a payer can still submit a UTR for an order they paid the wrong amount for. */
     claimWindowMs: 24 * 60 * MINUTE,

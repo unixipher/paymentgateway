@@ -3,6 +3,7 @@ import { randomId } from './crypto';
 import { isUniqueViolation, prisma, type Prisma } from './db';
 import { config } from './env';
 import { ApiError, badRequest, conflict, notFound } from './errors';
+import { logger } from './logger';
 import { formatRupees, rupeesToPaise } from './money';
 import { enqueueWebhook, scheduleDelivery } from './webhooks';
 
@@ -12,14 +13,20 @@ const TXN_OPTIONS = { maxWait: 15_000, timeout: 15_000 };
 const ago = (ms: number, from = Date.now()) => new Date(from - ms);
 
 export type OrderWithTxn = Order & { txn: Pick<BankTxn, 'utr' | 'payerVpa'> | null };
-export type OrderState = 'pending' | 'paid' | 'cancelled' | 'expired';
+export type OrderState = 'pending' | 'paid' | 'failed' | 'cancelled';
 const withTxn = { txn: { select: { utr: true, payerVpa: true } } } as const;
 
+/**
+ * `failed` means no payment arrived in time: the payment window plus a short "checking with your bank"
+ * period. It isn't stored, and it isn't quite final: a bank email that arrives within the grace period
+ * still marks the order paid (and sends order.paid). An order whose payer submitted a UTR stays
+ * pending while that UTR can still be matched.
+ */
 export function orderState(order: Order, now = Date.now()): OrderState {
   if (order.status !== 'pending') return order.status;
-  if (now <= order.expiresAt.getTime() + config().graceMs) return 'pending';
+  if (now <= order.expiresAt.getTime() + config().verifyingMs) return 'pending';
   if (order.claimedUtr && now <= order.createdAt.getTime() + config().claimWindowMs) return 'pending';
-  return 'expired';
+  return 'failed';
 }
 
 /** Where-clause for a computed state, so list filters agree with orderState(). */
@@ -27,12 +34,12 @@ function stateFilter(state: OrderState, now = Date.now()): Prisma.OrderWhereInpu
   const open: Prisma.OrderWhereInput = {
     status: 'pending',
     OR: [
-      { expiresAt: { gte: ago(config().graceMs, now) } },
+      { expiresAt: { gte: ago(config().verifyingMs, now) } },
       { claimedUtr: { not: null }, createdAt: { gte: ago(config().claimWindowMs, now) } },
     ],
   };
   if (state === 'pending') return open;
-  if (state === 'expired') return { status: 'pending', NOT: open };
+  if (state === 'failed') return { status: 'pending', NOT: open };
   return { status: state };
 }
 
@@ -241,7 +248,11 @@ async function markPaid(orderId: string, txnId: string) {
     throw err;
   }
   scheduleDelivery([webhookId]);
-  return getOrder(orderId);
+  const paid = await getOrder(orderId);
+  if (paid?.paidAt) {
+    logger.info('order paid', { orderId, durationMs: paid.paidAt.getTime() - paid.createdAt.getTime() });
+  }
+  return paid;
 }
 
 export async function claimUtr(orderId: string, utr: string) {
@@ -249,7 +260,14 @@ export async function claimUtr(orderId: string, utr: string) {
   if (!order) throw notFound('Order not found');
   const state = orderState(order);
   if (state === 'paid') return order;
-  if (state !== 'pending') throw new ApiError(410, 'gone', `This order is ${state}`);
+  // A failed order can still be claimed: the payer may have paid in time with the bank email running late.
+  if (state === 'cancelled' || Date.now() > order.createdAt.getTime() + config().claimWindowMs) {
+    throw new ApiError(410, 'gone', `This order is ${state}`);
+  }
+  const failed = await prisma.failedPayment.findUnique({ where: { merchantId_utr: { merchantId: order.merchantId, utr } } });
+  if (failed) {
+    throw new ApiError(422, 'payment_failed', 'This UPI payment failed, and your bank refunds any money that was debited. Please pay again.');
+  }
 
   await prisma.order.updateMany({ where: { id: orderId, status: 'pending' }, data: { claimedUtr: utr } });
   // The bank email may already be here (it just didn't match by amount), or it will arrive on a later poll.
@@ -258,16 +276,62 @@ export async function claimUtr(orderId: string, utr: string) {
   return (await getOrder(orderId))!;
 }
 
+// ---- Failed payments ----
+
+export interface FailedPaymentReport {
+  utr: string;
+  amountPaise: number | null;
+  gmailMessageId: string;
+  receivedAt: Date;
+}
+
+/** Remembers the reference number of a failed or reversed payment so it can't be claimed. */
+export async function recordFailedPayment(merchantId: string, failure: FailedPaymentReport) {
+  await prisma.failedPayment.createMany({ data: [{ merchantId, ...failure }], skipDuplicates: true });
+}
+
+/**
+ * Queues one order.failed webhook for each order that ran out of time. Runs from the cron and when a
+ * checkout page sees its order fail, so merchants without a cron still hear about it.
+ */
+export async function notifyFailedOrders(merchantId?: string, limit = 100) {
+  const now = Date.now();
+  const due = await prisma.order.findMany({
+    where: { ...(merchantId && { merchantId }), failureNotifiedAt: null, ...stateFilter('failed', now) },
+    orderBy: { expiresAt: 'asc' },
+    take: limit,
+    select: { id: true },
+  });
+
+  const webhookIds: (string | null)[] = [];
+  for (const { id } of due) {
+    await prisma.$transaction(async (tx) => {
+      // Guarded on the state again so a payment that lands meanwhile, or another worker, wins cleanly.
+      const claimed = await tx.order.updateMany({
+        where: { id, failureNotifiedAt: null, ...stateFilter('failed', now) },
+        data: { failureNotifiedAt: new Date(now) },
+      });
+      if (!claimed.count) return;
+      const order = await tx.order.findUniqueOrThrow({ where: { id }, include: { ...withTxn, merchant: true } });
+      webhookIds.push(await enqueueWebhook(tx, order.merchant, 'order.failed', { order: merchantOrderView(order, now) }, id));
+    }, TXN_OPTIONS);
+  }
+  scheduleDelivery(webhookIds);
+  return due.length;
+}
+
 // ---- API representations ----
 
 const iso = (date: Date | null) => date?.toISOString() ?? null;
 
 /** Full order, for the merchant (API key or dashboard session). */
-export function merchantOrderView(order: OrderWithTxn) {
+export function merchantOrderView(order: OrderWithTxn, now = Date.now()) {
+  const status = orderState(order, now);
   return {
     id: order.id,
     object: 'order',
-    status: orderState(order),
+    status,
+    failure_reason: status === 'failed' ? 'payment_not_received' : null,
     amount: formatRupees(order.amountPaise),
     amount_paise: order.amountPaise,
     base_amount: formatRupees(order.basePaise),
@@ -289,10 +353,12 @@ export function merchantOrderView(order: OrderWithTxn) {
 
 /** What the payer's checkout page needs. No merchant-private fields. */
 export function publicOrderView(order: OrderWithTxn, merchant: Pick<Merchant, 'vpa' | 'displayName' | 'email'>) {
+  const status = orderState(order);
   return {
     id: order.id,
     object: 'checkout',
-    status: orderState(order),
+    status,
+    failure_reason: status === 'failed' ? 'payment_not_received' : null,
     amount: formatRupees(order.amountPaise),
     amount_paise: order.amountPaise,
     currency: 'INR',
@@ -303,6 +369,7 @@ export function publicOrderView(order: OrderWithTxn, merchant: Pick<Merchant, 'v
     redirect_url: order.redirectUrl,
     utr: order.txn?.utr ?? null,
     utr_submitted: Boolean(order.claimedUtr),
+    created_at: iso(order.createdAt),
     expires_at: iso(order.expiresAt),
     paid_at: iso(order.paidAt),
   };

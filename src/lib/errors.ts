@@ -6,6 +6,7 @@ export type ErrorCode =
   | 'not_found'
   | 'conflict'
   | 'gone'
+  | 'payment_failed'
   | 'rate_limited'
   | 'gmail_not_connected'
   | 'merchant_not_configured'
