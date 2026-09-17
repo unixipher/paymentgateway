@@ -26,7 +26,8 @@ export async function authenticate(req: NextRequest, allow: AuthMethod[]): Promi
 
   if (token.startsWith(`${SESSION_TOKEN_PREFIX}_`) && allow.includes('session')) {
     const session = await prisma.session.findUnique({ where: { tokenHash: sha256Hex(token) }, include: { merchant: true } });
-    if (!session || session.expiresAt.getTime() < Date.now()) throw unauthorized('Session expired, sign in again');
+    // The merchant can be missing if the account is deleted while this request is in flight.
+    if (!session?.merchant || session.expiresAt.getTime() < Date.now()) throw unauthorized('Session expired, sign in again');
     // Only write lastUsedAt occasionally, not on every request.
     if (Date.now() - session.lastUsedAt.getTime() > 5 * 60_000) {
       await prisma.session.update({ where: { id: session.id }, data: { lastUsedAt: new Date() } });
