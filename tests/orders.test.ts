@@ -26,6 +26,11 @@ describe.skipIf(!hasDatabase)('order matching', () => {
     expect((await getOrder(mine.id))?.txn?.utr).toBe('425100000001');
   });
 
+  test('a payee saved as a bank account (account@IFSC.ifsc.npci) can no longer take orders', async () => {
+    const merchant = await createMerchant({ vpa: '7747664007@KKBK0006739.ifsc.npci' });
+    await expect(createOrder(merchant, { amount: '10' })).rejects.toMatchObject({ status: 409, code: 'merchant_not_configured' });
+  });
+
   test('orders created at the same instant never get the same amount', async () => {
     const merchant = await createMerchant();
     const created = await Promise.all(Array.from({ length: 20 }, () => createOrder(merchant, { amount: '10' })));

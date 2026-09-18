@@ -65,13 +65,9 @@ describe.skipIf(!hasDatabase)('HTTP API', () => {
     const ok = await patchMe(request('/api/me', { method: 'PATCH', headers: auth, body: { vpa: 'Me@OKAXIS', display_name: 'Ice Cream Co' } }), undefined);
     expect(await ok.json()).toMatchObject({ vpa: 'me@okaxis', display_name: 'Ice Cream Co' });
 
-    // A bank account without its own UPI ID, in NPCI's account@IFSC.ifsc.npci form.
-    const bank = await patchMe(request('/api/me', { method: 'PATCH', headers: auth, body: { vpa: '3101010000000207@kvbl0003101.IFSC.NPCI' } }), undefined);
-    expect(await bank.json()).toMatchObject({ vpa: '3101010000000207@KVBL0003101.ifsc.npci' });
-    for (const vpa of ['12345@KVBL0003101.ifsc.npci', '3101010000000207@KVB0003101.ifsc.npci', '3101010000000207@KVBL0003101.ifsc.evil']) {
-      const res = await patchMe(request('/api/me', { method: 'PATCH', headers: auth, body: { vpa } }), undefined);
-      expect(res.status, vpa).toBe(400);
-    }
+    // A bank account as account@IFSC.ifsc.npci is refused: UPI apps block payments to it from a QR or link.
+    const bank = await patchMe(request('/api/me', { method: 'PATCH', headers: auth, body: { vpa: '3101010000000207@KVBL0003101.ifsc.npci' } }), undefined);
+    expect(bank.status).toBe(400);
   });
 
   test('orders API: API key auth, idempotency, merchant isolation and consistent errors', async () => {

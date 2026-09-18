@@ -4,6 +4,7 @@ import { isUniqueViolation, prisma, type Prisma } from './db';
 import { config } from './env';
 import { ApiError, badRequest, conflict, notFound } from './errors';
 import { logger } from './logger';
+import { vpaSchema } from './merchants';
 import { formatRupees, rupeesToPaise } from './money';
 import { nameMatchesAlert, namesConflict } from './names';
 import { enqueueWebhook, scheduleDelivery } from './webhooks';
@@ -95,6 +96,10 @@ async function allocateAmount(
 
 export async function createOrder(merchant: Merchant, input: CreateOrderInput): Promise<OrderWithTxn> {
   if (!merchant.vpa) throw new ApiError(409, 'merchant_not_configured', 'Set your UPI ID before creating orders');
+  // e.g. a bank account saved as account@IFSC.ifsc.npci while that was allowed; UPI apps decline it.
+  if (!vpaSchema.safeParse(merchant.vpa).success) {
+    throw new ApiError(409, 'merchant_not_configured', 'Your payee address is not a UPI ID. Set a UPI ID like name@okhdfcbank in Settings.');
+  }
   if (!merchant.gmailRefreshToken && !(await prisma.device.count({ where: { merchantId: merchant.id } }))) {
     throw new ApiError(409, 'gmail_not_connected', 'Connect Gmail or pair a phone, so payments can be verified.');
   }

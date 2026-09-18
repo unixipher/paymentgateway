@@ -110,7 +110,7 @@ Update any of these fields (unknown fields are rejected):
 { "vpa": "shop@okhdfcbank", "display_name": "Ice Cream Co", "webhook_url": "https://shop.example/hooks/upi" }
 ```
 
-`vpa` is a UPI ID (`shop@okhdfcbank`, stored in lower case), or a bank account in NPCI's `<account number>@<IFSC>.ifsc.npci` form (`3101010000000207@KVBL0003101.ifsc.npci`, IFSC stored in capitals). The bank-account form lets a merchant whose account has no UPI ID of its own still get paid by UPI.
+`vpa` must be a UPI ID (`shop@okhdfcbank`, stored in lower case). A bank account written as `<account number>@<IFSC>.ifsc.npci` is refused. UPI apps (Paytm, PhonePe, Google Pay, BHIM) decline payments to that address when they come from a QR code or payment link, under their risk policy.
 
 `display_name` and `webhook_url` accept `null` to clear them. In production, `webhook_url` must be a public `https://` URL.
 
