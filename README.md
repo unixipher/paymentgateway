@@ -87,9 +87,9 @@ npm run build
 
 1. **Framework preset: Next.js.** If the project was created for the old Express version, change it under Settings → Build and Deployment.
 2. Set the environment variables from `.env.example`. `FRONTEND_URL` must be the deployed frontend URL. `API_BASE_URL` can be omitted when using the Vercel production domain.
-3. Run migrations from your machine against the production database: `npm run db:migrate`.
+3. **Migrations run automatically on production deploys.** `vercel.json` sets the build command to `npm run vercel-build`, which runs `prisma migrate deploy` (retrying once if another build holds the migration lock) before `next build`, but only when `VERCEL_ENV` is `production`. Preview deploys of other branches never change the database. This overrides any Build Command set in the Vercel dashboard. You can also migrate by hand with `npm run db:migrate`.
 4. **Cron (recommended).** Call `GET /api/cron/tick` every minute with `Authorization: Bearer $CRON_SECRET`.
-   - **Vercel Pro:** add `vercel.json` with `{ "crons": [{ "path": "/api/cron/tick", "schedule": "* * * * *" }] }`. Vercel sends `CRON_SECRET` automatically.
+   - **Vercel Pro:** add `"crons": [{ "path": "/api/cron/tick", "schedule": "* * * * *" }]` to `vercel.json`. Vercel sends `CRON_SECRET` automatically.
    - **Vercel Hobby** only allows daily crons. Use an external scheduler instead (cron-job.org, GitHub Actions, Upstash QStash) with that header.
    - Without a cron, payments are still detected while a checkout page is open, but webhook retries and cleanup only happen when the cron runs.
 

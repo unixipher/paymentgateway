@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "vercel-build": "if [ \"$VERCEL_ENV\" = production ]; then prisma migrate deploy || (sleep 20 && prisma migrate deploy); fi && next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
