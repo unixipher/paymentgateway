@@ -5,6 +5,7 @@ import { config } from './env';
 import { ApiError, badRequest, conflict, notFound } from './errors';
 import { logger } from './logger';
 import { formatRupees, rupeesToPaise } from './money';
+import { nameMatchesAlert, namesConflict } from './names';
 import { enqueueWebhook, scheduleDelivery } from './webhooks';
 
 const MAX_BASE_PAISE = 99_999_00; // UPI P2P limit is ₹1,00,000 and we add up to 99 paise
@@ -12,9 +13,9 @@ const MAX_BASE_PAISE = 99_999_00; // UPI P2P limit is ₹1,00,000 and we add up 
 const TXN_OPTIONS = { maxWait: 15_000, timeout: 15_000 };
 const ago = (ms: number, from = Date.now()) => new Date(from - ms);
 
-export type OrderWithTxn = Order & { txn: Pick<BankTxn, 'utr' | 'payerVpa'> | null };
+export type OrderWithTxn = Order & { txn: Pick<BankTxn, 'utr' | 'payerVpa' | 'payerName'> | null };
 export type OrderState = 'pending' | 'paid' | 'failed' | 'cancelled';
-const withTxn = { txn: { select: { utr: true, payerVpa: true } } } as const;
+const withTxn = { txn: { select: { utr: true, payerVpa: true, payerName: true } } } as const;
 
 /**
  * `failed` means no payment arrived in time: the payment window plus a short "checking with your bank"
@@ -51,12 +52,24 @@ export interface CreateOrderInput {
   redirectUrl?: string | null;
   metadata?: Record<string, string> | null;
   idempotencyKey?: string | null;
+  /** Name on the bank account the payer will pay from. Optional; see allocateAmount. */
+  payerName?: string | null;
 }
 
 // Two people paying ₹99 at the same time are told to pay ₹99.01 and ₹99.02, so the amount in the
 // bank's alert email says exactly whose payment it was. The exact base amount is never handed out,
 // which means someone who rounds to ₹99.00 can't accidentally settle another person's order.
-async function allocateAmount(tx: Prisma.TransactionClient, merchantId: string, basePaise: number, now: number) {
+//
+// Once all 99 are taken, payers who gave their name can share an amount with payers whose names are
+// clearly different ("Amal" and "Dilip" can both pay ₹99.07, two "Amal"s never), because the bank
+// alert says who sent the money. Payers without a name never share.
+async function allocateAmount(
+  tx: Prisma.TransactionClient,
+  merchantId: string,
+  basePaise: number,
+  now: number,
+  payerName: string | null,
+) {
   const open = await tx.order.findMany({
     where: {
       merchantId,
@@ -64,11 +77,18 @@ async function allocateAmount(tx: Prisma.TransactionClient, merchantId: string, 
       amountPaise: { gte: basePaise + 1, lte: basePaise + 99 },
       expiresAt: { gte: ago(config().graceMs, now) },
     },
-    select: { amountPaise: true },
+    select: { amountPaise: true, payerName: true },
   });
-  const used = new Set(open.map((o) => o.amountPaise));
+  const byAmount = new Map<number, (string | null)[]>();
+  for (const o of open) byAmount.set(o.amountPaise, [...(byAmount.get(o.amountPaise) ?? []), o.payerName]);
+
   for (let offset = 1; offset <= 99; offset++) {
-    if (!used.has(basePaise + offset)) return basePaise + offset;
+    if (!byAmount.has(basePaise + offset)) return basePaise + offset;
+  }
+  if (!payerName) return null;
+  for (let offset = 1; offset <= 99; offset++) {
+    const names = byAmount.get(basePaise + offset)!;
+    if (names.every((name) => name && !namesConflict(name, payerName))) return basePaise + offset;
   }
   return null;
 }
@@ -94,9 +114,10 @@ export async function createOrder(merchant: Merchant, input: CreateOrderInput): 
     return await prisma.$transaction(async (tx) => {
       // Serialise allocation per merchant so two simultaneous requests can't be handed the same amount.
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${merchant.id}))::text`;
-      const amountPaise = await allocateAmount(tx, merchant.id, basePaise, now);
+      const amountPaise = await allocateAmount(tx, merchant.id, basePaise, now, input.payerName ?? null);
       if (!amountPaise) {
-        throw new ApiError(429, 'rate_limited', 'Too many open orders for this amount, try again in a few minutes', undefined, {
+        const hint = input.payerName ? '' : ' Passing payer_name lets more payers share an amount.';
+        throw new ApiError(429, 'rate_limited', `Too many open orders for this amount, try again in a few minutes.${hint}`, undefined, {
           'Retry-After': '60',
         });
       }
@@ -110,6 +131,7 @@ export async function createOrder(merchant: Merchant, input: CreateOrderInput): 
           redirectUrl: input.redirectUrl ?? null,
           metadata: input.metadata ?? undefined,
           idempotencyKey: input.idempotencyKey ?? null,
+          payerName: input.payerName ?? null,
           createdAt: new Date(now),
           expiresAt: new Date(now + config().orderTtlMs),
         },
@@ -175,6 +197,8 @@ export interface BankCredit {
   amountPaise: number;
   utr: string | null;
   payerVpa: string | null;
+  /** The sender's name as the bank printed it, if the alert says. */
+  payerName?: string | null;
   bankDomain: string;
   receivedAt: Date;
 }
@@ -193,7 +217,7 @@ export async function recordBankCredit(merchantId: string, credit: BankCredit) {
       // within a few minutes is the same payment. The lock stops both being recorded at the same moment.
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`credit:${merchantId}`}))::text`;
       const t = credit.receivedAt.getTime();
-      const twin = await tx.bankTxn.findFirst({
+      const nearby = await tx.bankTxn.findMany({
         where: {
           merchantId,
           channel: { not: channel },
@@ -201,11 +225,18 @@ export async function recordBankCredit(merchantId: string, credit: BankCredit) {
           receivedAt: { gte: new Date(t - SAME_PAYMENT_WINDOW_MS), lte: new Date(t + SAME_PAYMENT_WINDOW_MS) },
           ...(credit.utr && { utr: null }),
         },
+        orderBy: { receivedAt: 'asc' },
       });
+      // Payers with different names can share an amount, so two alerts naming clearly different
+      // senders are two payments.
+      const twin = nearby.find((other) => !(credit.payerName && other.payerName && !namesConflict(credit.payerName, other.payerName)));
       if (twin) {
         if (!credit.utr) return null;
         // The twin had no UTR; now it has one, which a payer's UTR claim can match.
-        return tx.bankTxn.update({ where: { id: twin.id }, data: { utr: credit.utr, payerVpa: twin.payerVpa ?? credit.payerVpa } });
+        return tx.bankTxn.update({
+          where: { id: twin.id },
+          data: { utr: credit.utr, payerVpa: twin.payerVpa ?? credit.payerVpa, payerName: twin.payerName ?? credit.payerName ?? null },
+        });
       }
       return tx.bankTxn.create({ data: { merchantId, ...credit, channel } });
     }, TXN_OPTIONS);
@@ -223,7 +254,7 @@ async function matchTxn(txn: BankTxn) {
 
   // 1. The unique amount, received while that order was open. This always wins, so knowing
   //    someone else's UTR doesn't let you steal a payment that already identifies its order.
-  let order = await prisma.order.findFirst({
+  const sameAmount = await prisma.order.findMany({
     where: {
       merchantId: txn.merchantId,
       status: 'pending',
@@ -233,6 +264,7 @@ async function matchTxn(txn: BankTxn) {
     },
     orderBy: { createdAt: 'asc' },
   });
+  let order = pickBySender(sameAmount, txn);
 
   // 2. The payer submitted this UTR, e.g. because their app rounded ₹99.07 to ₹99.
   if (!order && txn.utr) {
@@ -249,6 +281,27 @@ async function matchTxn(txn: BankTxn) {
   }
 
   return order ? markPaid(order.id, txn.id) : null;
+}
+
+/**
+ * Normally at most one open order has a given amount. When payers shared it (see allocateAmount), the
+ * sender's name in the alert decides, and only if it matches exactly one of them. Otherwise nothing is
+ * guessed: the payer can still submit their UTR.
+ */
+function pickBySender(candidates: Order[], txn: BankTxn): Order | null {
+  if (candidates.length <= 1) return candidates[0] ?? null;
+  if (!candidates.some((o) => o.payerName)) return candidates[0]!;
+  const matches = txn.payerName
+    ? candidates.filter((o) => o.payerName && nameMatchesAlert(o.payerName, txn.payerName!))
+    : [];
+  if (matches.length === 1) return matches[0]!;
+  logger.warn('shared amount not matched by sender name', {
+    txnId: txn.id,
+    amountPaise: txn.amountPaise,
+    candidates: candidates.length,
+    nameMatches: matches.length,
+  });
+  return null;
 }
 
 class AlreadySettled extends Error {}
@@ -369,6 +422,9 @@ export function merchantOrderView(order: OrderWithTxn, now = Date.now()) {
     checkout_url: `${config().frontendUrl}/pay/${order.id}`,
     utr: order.txn?.utr ?? null,
     payer_vpa: order.txn?.payerVpa ?? null,
+    payer_name: order.payerName,
+    /** Who the bank says sent the money. */
+    paid_by: order.txn?.payerName ?? null,
     claimed_utr: order.claimedUtr,
     created_at: iso(order.createdAt),
     expires_at: iso(order.expiresAt),
@@ -395,6 +451,8 @@ export function publicOrderView(order: OrderWithTxn, merchant: Pick<Merchant, 'v
     redirect_url: order.redirectUrl,
     utr: order.txn?.utr ?? null,
     utr_submitted: Boolean(order.claimedUtr),
+    /** The name the payer gave; they should pay from a bank account in this name. */
+    payer_name: order.payerName,
     created_at: iso(order.createdAt),
     expires_at: iso(order.expiresAt),
     paid_at: iso(order.paidAt),

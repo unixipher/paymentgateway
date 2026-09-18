@@ -50,6 +50,7 @@ async function processMessage(merchant: Merchant, msg: GmailMessage) {
     amountPaise: alert.amountPaise,
     utr: alert.utr,
     payerVpa: alert.payerVpa,
+    payerName: alert.payerName,
     bankDomain: sender.domain,
     receivedAt,
   });

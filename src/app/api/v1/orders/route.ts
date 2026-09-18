@@ -11,6 +11,8 @@ const createOrderSchema = z
     amount: z.union([z.string(), z.number()]).transform(String),
     note: z.string().trim().min(1).max(50).optional(),
     redirect_url: z.url({ protocol: /^https?$/ }).max(500).optional(),
+    /** Name on the bank account the payer will pay from, if you ask them. */
+    payer_name: z.string().trim().min(2).max(60).regex(/[A-Za-z]{2}/, 'must contain letters').optional(),
     metadata: z
       .record(z.string().max(40), z.string().max(500))
       .refine((m) => Object.keys(m).length <= 20, 'at most 20 keys')
@@ -34,6 +36,7 @@ export const POST = handler(async (req: NextRequest) => {
     redirectUrl: body.redirect_url,
     metadata: body.metadata,
     idempotencyKey,
+    payerName: body.payer_name,
   });
   return json(merchantOrderView(order), { status: 201 });
 });

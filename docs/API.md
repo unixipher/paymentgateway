@@ -157,7 +157,7 @@ Use an **API key** from the merchant's server, or a **session token** from the d
   "note": "Ice Cream", "metadata": { "cart_id": "42" },
   "redirect_url": "https://shop.example/thanks",
   "checkout_url": "https://dashboard.example.com/pay/ord_…",
-  "utr": null, "payer_vpa": null, "claimed_utr": null,
+  "utr": null, "payer_vpa": null, "payer_name": "Amal Das", "paid_by": null, "claimed_utr": null,
   "created_at": "…", "expires_at": "…", "paid_at": null, "cancelled_at": null
 }
 ```
@@ -187,12 +187,15 @@ Idempotency-Key: cart-42-attempt-1
 | `note` | Optional, ≤ 50 characters. Shown in the payer's UPI app. |
 | `redirect_url` | Optional http(s) URL for the checkout page to send the payer to after payment. |
 | `metadata` | Optional string→string map, ≤ 20 keys. Returned as-is and never shown to the payer. |
+| `payer_name` | Optional, 2–60 characters. The name on the bank account the payer will pay from. See below. |
+
+**`payer_name` and busy prices.** Each open order for a price gets its own paise amount (₹99.01 … ₹99.99), so at most 99 payers can be paying the same price at once. Once all 99 are taken, an order with a `payer_name` can share an amount with open orders whose payers have *clearly different* names: "Amal" and "Dilip" can both pay ₹99.07, while "Amal Das" and "Amal Roy" never share one. When a shared amount arrives, the sender's name in the bank alert (e.g. Kotak's `Sender: AMAL DAS`) decides which order it pays, but only if it matches exactly one of them. If the payer used someone else's account, nothing is guessed, and they can submit their UTR instead. Orders without `payer_name` never share. The order's `paid_by` is the sender's name as the bank printed it.
 
 Responds `201` with the order. Send the payer to `checkout_url`.
 
 - **`Idempotency-Key`** (optional, ≤ 100 characters of `A-Z a-z 0-9 _ . : -`): retrying with the same key returns the original order instead of creating a new one. Reusing a key with a different amount returns `409 conflict`.
 - `409 merchant_not_configured`: no UPI ID is set. `409 gmail_not_connected`: Gmail access was lost.
-- `429 rate_limited`: over 120 orders per minute, or all 99 paise slots for this amount are taken. Retry after `Retry-After` seconds.
+- `429 rate_limited`: over 120 orders per minute, or all 99 paise slots for this amount are taken (and, with `payer_name`, none can be shared). Retry after `Retry-After` seconds.
 
 ### `GET /api/v1/orders`
 

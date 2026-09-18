@@ -54,7 +54,7 @@ export interface GmailPart {
 
 export type SenderCheck = { ok: true; domain: string } | { ok: false; reason: string };
 export type CreditAlert =
-  | { ok: true; amountPaise: number; utr: string | null; payerVpa: string | null }
+  | { ok: true; amountPaise: number; utr: string | null; payerVpa: string | null; payerName: string | null }
   | { ok: false; reason: string };
 
 export const header = (headers: GmailHeader[], name: string): string =>
@@ -101,6 +101,25 @@ function findUtr(text: string): string | null {
   return /\b(UPI|IMPS)\b/i.test(text) ? text.match(/\b(\d{12})\b/)?.[1] ?? null : null;
 }
 
+// The name that follows a label, up to the next label or punctuation.
+const NAME = String.raw`([A-Za-z][A-Za-z .']{1,60}?)`;
+const NAME_END = String.raw`(?=\s+(?:UPI|RRN|Ref|Refno|Reference|Date|Amount|A\/c|Account|VPA|Info|View|Balance|Avl|Available)\b|\s*[,;:(\-]|\s*$)`;
+const PAYER_NAME_PATTERNS = [
+  // Kotak/Kotak811 email: "Amount: ₹1.02 Sender: MRINMOY HALDER UPI Reference Number (RRN): …"
+  new RegExp(String.raw`\b(?:Sender|Remitter|Payer)(?:'s)?(?:\s+Name)?\s*[:\-]\s*${NAME}${NAME_END}`, 'i'),
+  // SBI SMS: "credited by 10.01 on date 18Sep26 trf from PAYER NAME Refno 425100000002"
+  new RegExp(String.raw`\btrf\s+from\s+${NAME}${NAME_END}`, 'i'),
+];
+
+/** The account holder who sent the money, as the bank prints it, if the alert says. */
+function findPayerName(text: string): string | null {
+  for (const pattern of PAYER_NAME_PATTERNS) {
+    const name = text.match(pattern)?.[1]?.replace(/\s+/g, ' ').trim();
+    if (name && /[A-Za-z]{2}/.test(name)) return name;
+  }
+  return null;
+}
+
 // Failed, declined or reversed transactions still mention the amount and often the words
 // "credit"/"credited" ("could not be credited", "will be credited back"), so they must be ruled out first.
 const FAILED = new RegExp([
@@ -136,7 +155,7 @@ export function parseCreditAlert(rawText: string): CreditAlert {
   if (!credited && !utr) return { ok: false, reason: 'no UPI reference found' };
 
   const payerVpa = text.match(/\b([a-z0-9][a-z0-9._-]*@[a-z][a-z0-9]*)\b(?!\.[a-z0-9])/i)?.[1] ?? null;
-  return { ok: true, amountPaise, utr, payerVpa };
+  return { ok: true, amountPaise, utr, payerVpa, payerName: findPayerName(text) };
 }
 
 /** The subject and readable body texts of an email: the plain part first, then the HTML part as text. */

@@ -25,7 +25,7 @@ describe('credit alerts', () => {
   test('HDFC style UPI credit', () => {
     expect(parseCreditAlert(`Dear Customer, Rs.99.07 has been credited to your account **1234 by VPA rahul.k@okaxis
       RAHUL KUMAR on 17-09-26. Your UPI transaction reference number is 425112345678. Warm Regards, HDFC Bank`))
-      .toEqual({ ok: true, amountPaise: 9907, utr: '425112345678', payerVpa: 'rahul.k@okaxis' });
+      .toEqual({ ok: true, amountPaise: 9907, utr: '425112345678', payerVpa: 'rahul.k@okaxis', payerName: null });
   });
 
   test('ICICI style credit with UPI/ info string and balance after the amount', () => {
@@ -36,7 +36,7 @@ describe('credit alerts', () => {
 
   test('Kotak style "received" with UPI ref', () => {
     expect(parseCreditAlert('Received Rs.250.00 in your Kotak Bank a/c XX4321 from priya@ybl on 17-09-26. UPI Ref:425100001111.'))
-      .toEqual({ ok: true, amountPaise: 25000, utr: '425100001111', payerVpa: 'priya@ybl' });
+      .toEqual({ ok: true, amountPaise: 25000, utr: '425100001111', payerVpa: 'priya@ybl', payerName: null });
   });
 
   test('Kotak811 UPI credit alert', () => {
@@ -44,7 +44,7 @@ describe('credit alerts', () => {
       UPI Credit in your Kotak A/c (XX1111). Here's the summary of your transaction: Date: 17-Sep-26 Amount: ₹1.01
       Sender: SOME PERSON UPI Reference Number (RRN): 626000000001 View balance: https://kotak811.com/mbapp/pay
       Digitally yours, Kotak811. Please do not reply to this mail. ${DISCLAIMER}`))
-      .toEqual({ ok: true, amountPaise: 101, utr: '626000000001', payerVpa: null });
+      .toEqual({ ok: true, amountPaise: 101, utr: '626000000001', payerVpa: null, payerName: 'SOME PERSON' });
   });
 
   test('falls back to the HTML part', () => {
@@ -55,7 +55,7 @@ describe('credit alerts', () => {
         { mimeType: 'text/plain', body: { data: b64('Please view this email in HTML') } },
         { mimeType: 'text/html', body: { data: b64('<p>&#8377;&nbsp;10.03 credited to a/c **99</p><td>UTR: 425100004444</td>') } },
       ],
-    })).toEqual({ ok: true, amountPaise: 1003, utr: '425100004444', payerVpa: null });
+    })).toEqual({ ok: true, amountPaise: 1003, utr: '425100004444', payerVpa: null, payerName: null });
   });
 
   test('email addresses are not mistaken for the payer VPA', () => {
@@ -186,4 +186,22 @@ describe('bank SMS and app notifications', () => {
     expect(verifyNotificationApp('com.phonepe.app', DEFAULT_TRUSTED_NOTIFICATION_APPS).ok).toBe(true);
     expect(verifyNotificationApp('com.example.phonepe.app', DEFAULT_TRUSTED_NOTIFICATION_APPS).ok).toBe(false);
   });
+});
+
+test('Kotak811 UPI credit email names the sender', () => {
+  const email = `Hi 811 Customer,
+
+You’ve received a UPI Credit in your Kotak A/c (XX4007).
+
+Here's the summary of your transaction:
+Date: 18-Sep-26
+Amount: ₹1.02
+Sender: MRINMOY HALDER
+UPI Reference Number (RRN): 314961406046
+
+View balance: https://kotak811.com/mbapp/pay
+
+For any queries or assistance, please contact our customer care at 1800 4100.`;
+  expect(parseCreditAlert(email)).toEqual({ ok: true, amountPaise: 102, utr: '314961406046', payerVpa: null, payerName: 'MRINMOY HALDER' });
+  expect(parseCreditAlert('A/C X1234 credited by 10.01 on date 18Sep26 trf from AMAL DAS Refno 425100000002. -SBI')).toMatchObject({ payerName: 'AMAL DAS' });
 });

@@ -101,6 +101,9 @@ model Order {
   /// "failed" (no payment in time) is computed from expiresAt; only pending/paid/cancelled are stored.
   status         OrderStatus @default(pending)
   claimedUtr     String?     @map("claimed_utr")
+  /// Name on the bank account the payer said they'd pay from. Lets payers with clearly different
+  /// names share one amount once all 99 paise amounts for a price are taken.
+  payerName      String?     @map("payer_name")
   /// Set once the order.failed webhook has been queued, so it is sent at most once.
   failureNotifiedAt DateTime? @map("failure_notified_at")
   createdAt      DateTime    @default(now()) @map("created_at")
@@ -137,6 +140,8 @@ model BankTxn {
   amountPaise Int      @map("amount_paise")
   utr         String?
   payerVpa    String?  @map("payer_vpa")
+  /// The sender's name as the bank printed it in the alert.
+  payerName   String?  @map("payer_name")
   /// Who sent the alert: the email domain, SMS sender (e.g. VM-HDFCBK-S) or app package.
   bankDomain  String   @map("bank_domain")
   receivedAt  DateTime @map("received_at")

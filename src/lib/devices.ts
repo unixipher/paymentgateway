@@ -149,6 +149,7 @@ async function processMessage(device: Device, msg: IncomingMessage): Promise<Mes
       amountPaise: alert.amountPaise,
       utr: alert.utr,
       payerVpa: alert.payerVpa,
+      payerName: alert.payerName,
       bankDomain: sender.domain,
       receivedAt,
     });

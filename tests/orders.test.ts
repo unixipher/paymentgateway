@@ -4,6 +4,7 @@ import {
   cancelOrder, claimUtr, createOrder, getOrder, listOrders, merchantOrderView, notifyFailedOrders, recordBankCredit, recordFailedPayment,
 } from '@/lib/orders';
 import { hasDatabase } from './setup';
+import { randomId } from '@/lib/crypto';
 import { createMerchant, credit, resetDatabase } from './helpers';
 
 const statusOf = async (id: string) => (await getOrder(id))?.status;
@@ -182,5 +183,90 @@ describe.skipIf(!hasDatabase)('failed orders', () => {
 
     await expire(order.id, 5);
     expect(merchantOrderView(await claimUtr(order.id, '425100000102')).status).toBe('pending');
+  });
+});
+
+describe.skipIf(!hasDatabase)('payers sharing an amount by name', () => {
+  beforeEach(resetDatabase);
+
+  // Five-letter names that never match each other, e.g. "BAAAA", "BAAAB".
+  const filler = (i: number) => `B${[3, 2, 1, 0].map((p) => String.fromCharCode(65 + (Math.floor(i / 26 ** p) % 26))).join('')}`;
+
+  /** Takes all 99 paise amounts for ₹10, each by a named payer. */
+  async function fillAllAmounts(merchantId: string) {
+    const now = Date.now();
+    await prisma.order.createMany({
+      data: Array.from({ length: 99 }, (_, i) => ({
+        id: randomId('ord'),
+        merchantId,
+        basePaise: 1000,
+        amountPaise: 1001 + i,
+        payerName: filler(i),
+        createdAt: new Date(now - 1000),
+        expiresAt: new Date(now + 120_000),
+      })),
+    });
+  }
+
+  test('without a name the 100th payer is refused; with one they share an amount', async () => {
+    const merchant = await createMerchant();
+    await fillAllAmounts(merchant.id);
+    await expect(createOrder(merchant, { amount: '10' })).rejects.toMatchObject({ status: 429 });
+    const amal = await createOrder(merchant, { amount: '10', payerName: 'Amal' });
+    expect(amal.amountPaise).toBeGreaterThanOrEqual(1001);
+    expect(amal.amountPaise).toBeLessThanOrEqual(1099);
+  });
+
+  test('two payers named Amal never share an amount, Amal and Dilip may', async () => {
+    const merchant = await createMerchant();
+    await fillAllAmounts(merchant.id);
+    const amalDas = await createOrder(merchant, { amount: '10', payerName: 'Amal Das' });
+    const amalRoy = await createOrder(merchant, { amount: '10', payerName: 'Amal Roy' });
+    const dilip = await createOrder(merchant, { amount: '10', payerName: 'Dilip' });
+    expect(amalRoy.amountPaise).not.toBe(amalDas.amountPaise);
+    expect(dilip.amountPaise).toBe(amalDas.amountPaise); // first amount whose payers are all clearly different
+  });
+
+  test("the sender's name in the alert decides who paid a shared amount", async () => {
+    const merchant = await createMerchant();
+    await fillAllAmounts(merchant.id);
+    const amal = await createOrder(merchant, { amount: '10', payerName: 'Amal' });
+    const dilip = await createOrder(merchant, { amount: '10', payerName: 'Dilip' });
+    expect(dilip.amountPaise).toBe(amal.amountPaise);
+
+    const paidDilip = await recordBankCredit(merchant.id, { ...credit(dilip.amountPaise, '425100000301'), payerName: 'DILIP KUMAR ROY' });
+    expect(paidDilip?.id).toBe(dilip.id);
+    expect(paidDilip?.txn?.payerName).toBe('DILIP KUMAR ROY');
+    expect(await statusOf(amal.id)).toBe('pending');
+
+    const paidAmal = await recordBankCredit(merchant.id, { ...credit(amal.amountPaise, '425100000302'), payerName: 'MR AMAL SEN' });
+    expect(paidAmal?.id).toBe(amal.id);
+  });
+
+  test('a shared amount from an unknown sender is never guessed; the UTR claim still works', async () => {
+    const merchant = await createMerchant();
+    await fillAllAmounts(merchant.id);
+    const amal = await createOrder(merchant, { amount: '10', payerName: 'Amal' });
+    const dilip = await createOrder(merchant, { amount: '10', payerName: 'Dilip' });
+
+    // Dilip paid from his father's account.
+    expect(await recordBankCredit(merchant.id, { ...credit(dilip.amountPaise, '425100000303'), payerName: 'RAMESH KUMAR' })).toBeNull();
+    expect(await statusOf(amal.id)).toBe('pending');
+    expect(await statusOf(dilip.id)).toBe('pending');
+
+    expect((await claimUtr(dilip.id, '425100000303')).status).toBe('paid');
+    expect(await statusOf(amal.id)).toBe('pending');
+  });
+
+  test('an email and an SMS naming different senders are two payments, not one', async () => {
+    const merchant = await createMerchant();
+    await fillAllAmounts(merchant.id);
+    const amal = await createOrder(merchant, { amount: '10', payerName: 'Amal' });
+    const dilip = await createOrder(merchant, { amount: '10', payerName: 'Dilip' });
+
+    await recordBankCredit(merchant.id, { ...credit(amal.amountPaise, '425100000304'), payerName: 'AMAL SEN' });
+    const sms = await recordBankCredit(merchant.id, { ...credit(dilip.amountPaise, null), channel: 'sms', payerName: 'DILIP ROY' });
+    expect(sms?.id).toBe(dilip.id);
+    expect(await statusOf(amal.id)).toBe('paid');
   });
 });
