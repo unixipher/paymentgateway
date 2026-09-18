@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import { rupeesToPaise } from '@/lib/money';
 import {
-  DEFAULT_TRUSTED_BANK_DOMAINS as TRUSTED, parseCreditAlert, parseCreditEmail, parseFailedPayment, verifySender, type GmailHeader,
+  DEFAULT_TRUSTED_BANK_DOMAINS as TRUSTED, DEFAULT_TRUSTED_NOTIFICATION_APPS, DEFAULT_TRUSTED_SMS_SENDERS, parseCreditAlert,
+  parseCreditEmail, parseFailedPayment, verifyNotificationApp, verifySender, verifySmsSender, type GmailHeader,
 } from '@/lib/parser';
 
 const gmailAuth = (value: string): GmailHeader => ({ name: 'Authentication-Results', value });
@@ -156,5 +157,33 @@ describe('failed payments (any bank)', () => {
   test('successful payments and failures without a reference are not failed payments', () => {
     expect(parseFailedPayment('You have successfully made a UPI payment of INR 1.00. UPI Reference Number: 662609379427').ok).toBe(false);
     expect(parseFailedPayment('Your UPI payment failed. Please try again.').ok).toBe(false);
+  });
+});
+
+describe('bank SMS and app notifications', () => {
+  test.each([
+    ['HDFC', 'Credit Alert!\nRs.10.01 credited to HDFC Bank A/c XX1234 on 18-09-26 from VPA payer@okaxis (UPI 425100000001)', 1001, '425100000001'],
+    ['SBI, no currency', 'Dear UPI user A/C X1234 credited by 10.01 on date 18Sep26 trf from PAYER NAME Refno 425100000002. If not u? call 1800111109. -SBI', 1001, '425100000002'],
+    ['ICICI', 'ICICI Bank Account XX123 credited:Rs. 1,250.50 on 18-Sep-26. Info UPI/P2A/425100000003/PAYER. Available Balance is Rs. 5,000.00.', 125050, '425100000003'],
+  ])('%s credit SMS', (_, sms, amountPaise, utr) => {
+    expect(parseCreditAlert(sms)).toMatchObject({ ok: true, amountPaise, utr });
+  });
+
+  test('debit and failed SMS are not credits', () => {
+    expect(parseCreditAlert('Rs.500.00 debited from A/c XX1234 on 18-09-26 to VPA shop@okaxis (UPI 425100000004)').ok).toBe(false);
+    expect(parseCreditAlert('UPI txn of Rs 10.01 failed. Amount will be credited back to A/c XX1234. Ref 425100000005').ok).toBe(false);
+  });
+
+  test.each(['VM-HDFCBK', 'JD-HDFCBK-S', 'ax-sbiupi-t'])('trusted SMS sender %s', (sender) => {
+    expect(verifySmsSender(sender, DEFAULT_TRUSTED_SMS_SENDERS).ok).toBe(true);
+  });
+
+  test.each(['+919812345678', 'HDFCBK', 'VM-HDFCBX', 'VM-HDFCBK-SPAM', 'VM-HDFCBK1'])('untrusted SMS sender %s', (sender) => {
+    expect(verifySmsSender(sender, DEFAULT_TRUSTED_SMS_SENDERS).ok).toBe(false);
+  });
+
+  test('notifications count only from trusted apps', () => {
+    expect(verifyNotificationApp('com.phonepe.app', DEFAULT_TRUSTED_NOTIFICATION_APPS).ok).toBe(true);
+    expect(verifyNotificationApp('com.example.phonepe.app', DEFAULT_TRUSTED_NOTIFICATION_APPS).ok).toBe(false);
   });
 });

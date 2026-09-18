@@ -143,7 +143,7 @@ describe.skipIf(!hasDatabase)('failed orders', () => {
   test('an order fails after the payment window plus the checking minute, not before', async () => {
     const merchant = await createMerchant();
     const order = await createOrder(merchant, { amount: '10' });
-    expect(order.expiresAt.getTime() - order.createdAt.getTime()).toBe(3 * 60_000);
+    expect(order.expiresAt.getTime() - order.createdAt.getTime()).toBe(2 * 60_000);
 
     await expire(order.id, 0.5);
     expect(merchantOrderView((await getOrder(order.id))!).status).toBe('pending');
@@ -177,7 +177,7 @@ describe.skipIf(!hasDatabase)('failed orders', () => {
   test('a UTR from a failed payment is rejected, and failed orders can still be claimed', async () => {
     const merchant = await createMerchant();
     const order = await createOrder(merchant, { amount: '10' });
-    await recordFailedPayment(merchant.id, { utr: '662600000001', amountPaise: 1001, gmailMessageId: 'failmsg', receivedAt: new Date() });
+    await recordFailedPayment(merchant.id, { utr: '662600000001', amountPaise: 1001, messageId: 'failmsg', receivedAt: new Date() });
     await expect(claimUtr(order.id, '662600000001')).rejects.toMatchObject({ status: 422, code: 'payment_failed' });
 
     await expire(order.id, 5);

@@ -1,4 +1,4 @@
-import type { BankTxn, Merchant, Order } from '@/generated/prisma/client';
+import type { BankTxn, Channel, Merchant, Order } from '@/generated/prisma/client';
 import { randomId } from './crypto';
 import { isUniqueViolation, prisma, type Prisma } from './db';
 import { config } from './env';
@@ -75,8 +75,8 @@ async function allocateAmount(tx: Prisma.TransactionClient, merchantId: string, 
 
 export async function createOrder(merchant: Merchant, input: CreateOrderInput): Promise<OrderWithTxn> {
   if (!merchant.vpa) throw new ApiError(409, 'merchant_not_configured', 'Set your UPI ID before creating orders');
-  if (!merchant.gmailRefreshToken) {
-    throw new ApiError(409, 'gmail_not_connected', 'Gmail is not connected, so payments could not be verified. Sign in again.');
+  if (!merchant.gmailRefreshToken && !(await prisma.device.count({ where: { merchantId: merchant.id } }))) {
+    throw new ApiError(409, 'gmail_not_connected', 'Connect Gmail or pair a phone, so payments can be verified.');
   }
 
   const basePaise = rupeesToPaise(input.amount);
@@ -170,7 +170,8 @@ export async function cancelOrder(merchantId: string, id: string) {
 // ---- Matching bank credits to orders ----
 
 export interface BankCredit {
-  gmailMessageId: string;
+  channel?: Channel;
+  messageId: string;
   amountPaise: number;
   utr: string | null;
   payerVpa: string | null;
@@ -178,16 +179,41 @@ export interface BankCredit {
   receivedAt: Date;
 }
 
-/** Called once per verified bank credit email. Returns the order it paid, if any. */
+/** How far apart an email and an SMS for the same payment can arrive. */
+const SAME_PAYMENT_WINDOW_MS = 15 * 60_000;
+
+/** Called once per verified bank credit alert. Returns the order it paid, if any. */
 export async function recordBankCredit(merchantId: string, credit: BankCredit) {
-  let txn: BankTxn;
+  const channel = credit.channel ?? 'email';
+  let txn: BankTxn | null;
   try {
-    txn = await prisma.bankTxn.create({ data: { merchantId, ...credit } });
+    txn = await prisma.$transaction(async (tx) => {
+      // One payment is often reported twice: by the bank's email and by its SMS. With the same UTR the
+      // unique index catches it. When one of them has no UTR, the same amount from the other channel
+      // within a few minutes is the same payment. The lock stops both being recorded at the same moment.
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`credit:${merchantId}`}))::text`;
+      const t = credit.receivedAt.getTime();
+      const twin = await tx.bankTxn.findFirst({
+        where: {
+          merchantId,
+          channel: { not: channel },
+          amountPaise: credit.amountPaise,
+          receivedAt: { gte: new Date(t - SAME_PAYMENT_WINDOW_MS), lte: new Date(t + SAME_PAYMENT_WINDOW_MS) },
+          ...(credit.utr && { utr: null }),
+        },
+      });
+      if (twin) {
+        if (!credit.utr) return null;
+        // The twin had no UTR; now it has one, which a payer's UTR claim can match.
+        return tx.bankTxn.update({ where: { id: twin.id }, data: { utr: credit.utr, payerVpa: twin.payerVpa ?? credit.payerVpa } });
+      }
+      return tx.bankTxn.create({ data: { merchantId, ...credit, channel } });
+    }, TXN_OPTIONS);
   } catch (err) {
     if (isUniqueViolation(err)) return null; // already processed, or a duplicate alert for the same UTR
     throw err;
   }
-  return matchTxn(txn);
+  return txn ? matchTxn(txn) : null;
 }
 
 async function matchTxn(txn: BankTxn) {
@@ -270,7 +296,7 @@ export async function claimUtr(orderId: string, utr: string) {
   }
 
   await prisma.order.updateMany({ where: { id: orderId, status: 'pending' }, data: { claimedUtr: utr } });
-  // The bank email may already be here (it just didn't match by amount), or it will arrive on a later poll.
+  // The bank alert may already be here (it just didn't match by amount), or it will arrive later.
   const txn = await prisma.bankTxn.findFirst({ where: { merchantId: order.merchantId, utr, orderId: null } });
   if (txn) await matchTxn(txn);
   return (await getOrder(orderId))!;
@@ -281,7 +307,7 @@ export async function claimUtr(orderId: string, utr: string) {
 export interface FailedPaymentReport {
   utr: string;
   amountPaise: number | null;
-  gmailMessageId: string;
+  messageId: string;
   receivedAt: Date;
 }
 

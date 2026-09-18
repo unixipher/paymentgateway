@@ -9,6 +9,10 @@ export async function resetDatabase() {
     prisma.bankTxn.deleteMany(),
     prisma.order.deleteMany(),
     prisma.gmailMessage.deleteMany(),
+    prisma.deviceMessage.deleteMany(),
+    prisma.devicePairingCode.deleteMany(),
+    prisma.device.deleteMany(),
+    prisma.failedPayment.deleteMany(),
     prisma.session.deleteMany(),
     prisma.loginCode.deleteMany(),
     prisma.rateLimit.deleteMany(),
@@ -32,7 +36,7 @@ export function createMerchant(overrides: Partial<Parameters<typeof prisma.merch
 
 let gmailId = 0;
 export const credit = (amountPaise: number, utr: string | null, receivedAt = new Date()) => ({
-  gmailMessageId: `msg${++gmailId}-${Date.now()}`,
+  messageId: `msg${++gmailId}-${Date.now()}`,
   amountPaise,
   utr,
   payerVpa: null,

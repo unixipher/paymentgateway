@@ -46,6 +46,9 @@ model Merchant {
   bankTxns          BankTxn[]
   failedPayments    FailedPayment[]
   gmailMessages     GmailMessage[]
+  devices           Device[]
+  pairingCodes      DevicePairingCode[]
+  deviceMessages    DeviceMessage[]
   sessions          Session[]
   loginCodes        LoginCode[]
   webhookDeliveries WebhookDelivery[]
@@ -118,16 +121,25 @@ model Order {
   @@map("orders")
 }
 
-/// A verified credit parsed from a bank alert email.
+enum Channel {
+  email
+  sms
+  notification
+}
+
+/// A verified credit parsed from a bank alert: an email from Gmail, or an SMS/notification from a paired phone.
 model BankTxn {
-  id             String   @id @default(cuid())
-  merchantId     String   @map("merchant_id")
-  gmailMessageId String   @map("gmail_message_id")
-  amountPaise    Int      @map("amount_paise")
-  utr            String?
-  payerVpa       String?  @map("payer_vpa")
-  bankDomain     String   @map("bank_domain")
-  receivedAt     DateTime @map("received_at")
+  id          String   @id @default(cuid())
+  merchantId  String   @map("merchant_id")
+  channel     Channel  @default(email)
+  /// Gmail message id, or `<deviceId>:<id the phone gave the message>`.
+  messageId   String   @map("message_id")
+  amountPaise Int      @map("amount_paise")
+  utr         String?
+  payerVpa    String?  @map("payer_vpa")
+  /// Who sent the alert: the email domain, SMS sender (e.g. VM-HDFCBK-S) or app package.
+  bankDomain  String   @map("bank_domain")
+  receivedAt  DateTime @map("received_at")
   /// A bank credit can pay at most one order.
   orderId        String?  @unique @map("order_id")
   createdAt      DateTime @default(now()) @map("created_at")
@@ -135,21 +147,21 @@ model BankTxn {
   merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   order    Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
 
-  @@unique([merchantId, gmailMessageId])
+  @@unique([merchantId, messageId])
   /// The same UTR can never be counted twice.
   @@unique([merchantId, utr])
   @@map("bank_txns")
 }
 
-/// A failed or reversed UPI payment reported in a bank email. Its reference number can never pay an
+/// A failed or reversed UPI payment reported in a bank alert. Its reference number can never pay an
 /// order, so a payer who submits it is told the payment failed instead of waiting forever.
 model FailedPayment {
   merchantId     String   @map("merchant_id")
-  utr            String
-  gmailMessageId String   @map("gmail_message_id")
-  amountPaise    Int?     @map("amount_paise")
-  receivedAt     DateTime @map("received_at")
-  createdAt      DateTime @default(now()) @map("created_at")
+  utr         String
+  messageId   String   @map("message_id")
+  amountPaise Int?     @map("amount_paise")
+  receivedAt  DateTime @map("received_at")
+  createdAt   DateTime @default(now()) @map("created_at")
 
   merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
 
@@ -172,6 +184,57 @@ model GmailMessage {
   @@id([merchantId, gmailMessageId])
   @@index([merchantId, receivedAt])
   @@map("gmail_messages")
+}
+
+/// A merchant's phone running the Android app, which forwards bank SMS and notifications as they arrive.
+/// Only the SHA-256 of its token is stored; deleting the row revokes it.
+model Device {
+  id          String    @id
+  merchantId  String    @map("merchant_id")
+  name        String
+  platform    String
+  appVersion  String?   @map("app_version")
+  tokenHash   String    @unique @map("token_hash")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  lastSeenAt  DateTime? @map("last_seen_at")
+
+  merchant Merchant        @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  messages DeviceMessage[]
+
+  @@index([merchantId])
+  @@map("devices")
+}
+
+/// Short-lived, single-use code typed into the app to pair it with the merchant's account.
+model DevicePairingCode {
+  codeHash   String   @id @map("code_hash")
+  merchantId String   @map("merchant_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  expiresAt  DateTime @map("expires_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("device_pairing_codes")
+}
+
+/// Every SMS or notification a phone sent, and what was decided. Kept after the phone is removed.
+model DeviceMessage {
+  /// `<deviceId>:<id the phone gave the message>`, so a retried upload is recognised.
+  id         String   @id
+  merchantId String   @map("merchant_id")
+  deviceId   String?  @map("device_id")
+  channel    Channel
+  sender     String
+  receivedAt DateTime @map("received_at")
+  verdict    String
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  device   Device?  @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([merchantId, receivedAt])
+  @@map("device_messages")
 }
 
 /// Outbox of webhook events. Written in the same transaction as the change it reports, then delivered

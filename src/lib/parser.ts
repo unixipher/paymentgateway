@@ -9,6 +9,37 @@ export const DEFAULT_TRUSTED_BANK_DOMAINS = [
   'canarabank.com', 'unionbankofindia.co.in', 'federalbank.co.in', 'aubank.in',
 ];
 
+/**
+ * Core of the DLT sender header banks send SMS alerts from: "VM-HDFCBK-S" → HDFCBK. Indian operators
+ * only deliver SMS from a registered header with an operator prefix, so a stranger can't send from one.
+ */
+export const DEFAULT_TRUSTED_SMS_SENDERS = [
+  'HDFCBK', 'SBIUPI', 'SBIINB', 'CBSSBI', 'ICICIB', 'AXISBK', 'KOTAKB', 'YESBNK', 'IDFCFB', 'INDUSB',
+  'PNBSMS', 'BOBTXN', 'BOBSMS', 'CANBNK', 'UNIONB', 'FEDBNK', 'AUBANK', 'IDBIBK',
+];
+
+/** Apps whose notifications are read: the major UPI apps. Banks' own apps can be added with TRUSTED_NOTIFICATION_APPS. */
+export const DEFAULT_TRUSTED_NOTIFICATION_APPS = [
+  'com.google.android.apps.nbu.paisa.user', // Google Pay
+  'com.phonepe.app',
+  'net.one97.paytm',
+  'in.org.npci.upiapp', // BHIM
+];
+
+export function verifySmsSender(sender: string, trustedSenders: string[]): SenderCheck {
+  // Real DLT headers: 2 letter operator/circle prefix, 6 character header, optional type suffix (-S, -T, -P, -G).
+  const core = sender.trim().toUpperCase().match(/^[A-Z]{2}-([A-Z0-9]{6})(?:-[A-Z])?$/)?.[1];
+  if (!core) return { ok: false, reason: `sender ${sender} is not a bank SMS header` };
+  if (!trustedSenders.includes(core)) return { ok: false, reason: `sender ${sender} is not a trusted bank` };
+  return { ok: true, domain: sender.trim().toUpperCase() };
+}
+
+export function verifyNotificationApp(packageName: string, trustedApps: string[]): SenderCheck {
+  return trustedApps.includes(packageName)
+    ? { ok: true, domain: packageName }
+    : { ok: false, reason: `app ${packageName} is not trusted` };
+}
+
 export interface GmailHeader {
   name: string;
   value: string;
@@ -94,7 +125,9 @@ export function parseCreditAlert(rawText: string): CreditAlert {
   const received = /\b(received|deposited)\s+(?:a\s+)?(?:UPI\s+)?(?:₹|Rs\b|INR\b|credit\b|payment\b|money\b|in\b|into\b|to\b)/i.test(text);
   if (!credited && !received) return { ok: false, reason: 'not a credit alert' };
 
-  const amount = text.match(/(?:₹|\bRs\.?|\bINR)\s*([\d,]+(?:\.\d{1,2})?)/i)?.[1];
+  // SBI's SMS has no currency at all: "A/C X1234 credited by 10.01 on date 18Sep26".
+  const amount = text.match(/(?:₹|\bRs\.?|\bINR)\s*([\d,]+(?:\.\d{1,2})?)/i)?.[1]
+    ?? text.match(/\bcredited (?:by|with|for) ([\d,]+(?:\.\d{1,2})?)\b/i)?.[1];
   const amountPaise = amount ? rupeesToPaise(amount.replace(/,/g, '')) : null;
   if (!amountPaise) return { ok: false, reason: 'no amount found' };
 

@@ -9,16 +9,18 @@ Base URL: the backend deployment, e.g. `https://api.example.com`. All request an
 - [Orders](#orders)
 - [Checkout (public)](#checkout-public)
 - [Webhooks](#webhooks)
+- [Android app (bank SMS)](#android-app-bank-sms)
 - [Operations](#operations)
 
 ## Authentication
 
-Every authenticated request sends `Authorization: Bearer <token>`. There are two kinds of token:
+Every authenticated request sends `Authorization: Bearer <token>`. There are three kinds of token:
 
 | Token | Looks like | Who uses it | Can call |
 |---|---|---|---|
 | Session token | `pgs_…` | The dashboard frontend, after Google sign-in | `/api/me/*`, `/api/auth/session`, `/api/v1/*` |
 | API key | `pgk_live_…` | The merchant's own server | `/api/v1/*` |
+| Device token | `pgd_…` | The Android app on a paired phone | `/api/device/*` (except `pair`) |
 
 Never put an API key in browser code. `/api/public/*` needs no token.
 
@@ -36,7 +38,7 @@ Never put an API key in browser code. `/api/public/*` needs no token.
 | 401 | `unauthorized` (missing, invalid or expired token) |
 | 403 | `forbidden` |
 | 404 | `not_found` |
-| 409 | `conflict`, `gmail_not_connected`, `merchant_not_configured` |
+| 409 | `conflict`, `gmail_not_connected` (no Gmail and no paired phone), `merchant_not_configured` |
 | 410 | `gone` (order cancelled, or too old to claim) |
 | 422 | `payment_failed` (the submitted UTR belongs to a failed payment) |
 | 429 | `rate_limited` (see the `Retry-After` header, in seconds) |
@@ -129,6 +131,13 @@ Update any of these fields (unknown fields are rejected):
 
 - `GET /api/me/bank-emails` (paginated): bank emails the poller examined, and what it decided. Each item has `id`, `received_at`, `from`, `subject`, `verdict` and `recognised`. Example verdicts: `credit ₹99.01, UTR 425112345678`, `ignored: failed or reversed transaction`.
 - `POST /api/me/gmail/scan` `{ "days": 3 }` (1–7) re-reads recent bank emails now → `{ "orders_paid": 0 }`. Limited to 2 per minute.
+
+### Paired phones
+
+- `POST /api/me/devices/pairing-code` → `201 { "code": "K7QM-2WXR", "expires_at": "…", "server_url": "https://…" }`. Single use, valid 10 minutes, and creating one cancels the previous code. Show it for the merchant to type into the app.
+- `GET /api/me/devices` → `{ "data": [{ "id": "dev_…", "name": "Samsung SM-A515F", "platform": "android", "app_version": "1.0.0", "created_at": "…", "last_seen_at": "…" }] }`. The app checks in at least every 15 minutes, so a `last_seen_at` older than about 20 minutes means the phone is offline.
+- `DELETE /api/me/devices/:id` → `204`. The phone's token stops working immediately.
+- `GET /api/me/device-messages` (paginated): SMS and notifications the phones forwarded, and what was decided. Each item has `id`, `device_id`, `device_name`, `channel` (`sms` | `notification`), `sender`, `received_at`, `verdict` and `recognised`.
 
 ## Orders
 
@@ -274,7 +283,42 @@ export function verifyWebhook(rawBody: string, signatureHeader: string, secret: 
 
 Use the **raw** body exactly as received, not re-serialised JSON.
 
+## Android app (bank SMS)
+
+A merchant's Android phone ([paymentgateway-android](../../paymentgateway-android)) forwards bank SMS and UPI app notifications the moment they arrive. They go through the same parser as bank emails, so a credit pays its order within seconds instead of waiting for the email. Gmail keeps working alongside it, and a merchant with a paired phone can create orders without Gmail.
+
+**What counts as genuine.** An SMS counts only if it comes from a registered bank sender header (`VM-HDFCBK`, `JD-SBIUPI-S`, …; the operator prefix is required, so a phone number never passes). The trusted headers are the defaults in `lib/parser.ts` plus `TRUSTED_SMS_SENDERS`. A notification counts only if it comes from a trusted app package (Google Pay, PhonePe, Paytm and BHIM by default, plus `TRUSTED_NOTIFICATION_APPS`). The device token is what vouches for the phone, so treat a phone's token like an API key: remove the phone from the dashboard if it is lost.
+
+**Same payment, two alerts.** One payment is usually reported by both the bank's email and its SMS. With the same UTR it is counted once. If one of the two alerts has no UTR, a credit of the same amount from the other channel within 15 minutes is treated as the same payment, and the UTR, if either alert has one, is kept.
+
+### `POST /api/device/pair`
+
+No token. `{ "code": "K7QM-2WXR", "name": "Shop phone", "platform": "android", "app_version": "1.0.0" }` → `201 { "device_token": "pgd_…", "device": {…}, "merchant": { "email", "display_name" }, "rules": { "sms_senders": ["HDFCBK", …], "notification_apps": ["com.phonepe.app", …] } }`. The token is returned only here. Limited to 10 attempts per 10 minutes per IP address.
+
+### `GET /api/device/me`
+
+The app's heartbeat. It returns the same `device`, `merchant` and `rules` fields and updates `last_seen_at`. The app uses `rules` to decide what to forward, so no personal SMS leave the phone. `401` means the phone was removed and must be paired again.
+
+### `DELETE /api/device/me`
+
+Unpairs the calling phone → `204`.
+
+### `POST /api/device/messages`
+
+```json
+{ "messages": [{
+  "id": "5f0c…",
+  "channel": "sms",
+  "sender": "VM-HDFCBK-S",
+  "title": null,
+  "body": "Rs.99.01 credited to HDFC Bank A/c XX1234 from VPA payer@okaxis (UPI 425112345678)",
+  "received_at": "2026-09-18T06:15:02Z"
+}] }
+```
+
+Up to 50 messages per call, processed in order → `{ "data": [{ "id": "5f0c…", "status": "credit" | "failed_payment" | "ignored", "verdict": "credit ₹99.01, UTR 425112345678", "order_id": "ord_…" | null }] }`. `id` is the app's own stable id for the message: sending it again returns the stored verdict without processing it twice, so retries are always safe. A `received_at` in the future is treated as now. Limited to 60 calls per minute per phone.
+
 ## Operations
 
 - `GET /api/health` → `200 {"status":"ok","database":"up"}`, or `503` if the database is down.
-- `GET /api/cron/tick` with `Authorization: Bearer <CRON_SECRET>` checks Gmail for merchants with open orders, sends `order.failed` webhooks, retries due webhooks, and deletes expired sessions, login codes and rate-limit rows. Run it every minute.
+- `GET /api/cron/tick` with `Authorization: Bearer <CRON_SECRET>` checks Gmail for merchants with open orders, sends `order.failed` webhooks, retries due webhooks, and deletes expired sessions, login codes, pairing codes and rate-limit rows. Run it every minute.

@@ -1,6 +1,6 @@
 # Payment Gateway (backend)
 
-UPI payments to a merchant's own UPI ID, verified automatically by reading their bank's credit alert emails from Gmail. This repo is the backend only: a Next.js (App Router, TypeScript) API. The dashboard and checkout UI live in a separate frontend repo.
+UPI payments to a merchant's own UPI ID, verified automatically by reading their bank's credit alert emails from Gmail, and instantly from bank SMS through the Android app ([paymentgateway-android](../paymentgateway-android)). This repo is the backend only: a Next.js (App Router, TypeScript) API. The dashboard and checkout UI live in a separate frontend repo.
 
 **API reference for the frontend and merchants: [docs/API.md](docs/API.md)**
 
@@ -17,6 +17,8 @@ UPI payments to a merchant's own UPI ID, verified automatically by reading their
 
 If a payer's app rounds the amount, they can submit their 12-digit UTR on the checkout page. An exact-amount match always wins over a UTR claim.
 
+**Bank SMS** reach the backend within seconds when the merchant pairs an Android phone (dashboard → Phones). Each SMS goes through the same parser and matching as an email. It must come from a registered bank sender header, and one payment reported by both email and SMS is counted once. See [docs/API.md](docs/API.md#android-app-bank-sms).
+
 Gmail is checked **on demand**, when the checkout page polls the order status (at most once per 15 s per merchant), and **by a cron** every minute if one is configured.
 
 ## Project layout
@@ -29,6 +31,8 @@ src/
     api/me/…              merchant settings, API key, webhook secret, delivery log, bank emails, scan
     api/v1/orders/…       orders API (API key or session)
     api/public/orders/…   checkout: status, QR PNG, UTR claim (CORS: any origin)
+    api/device/…          Android app: pairing, heartbeat, forwarded bank SMS/notifications
+    api/me/devices/…      pairing codes, paired phones, forwarded-message log
     api/cron/tick         Gmail polling, webhook retries, cleanup
     api/health
   proxy.ts                CORS and security headers
@@ -36,6 +40,7 @@ src/
     parser.ts             bank email → verified credit (pure, heavily tested)
     orders.ts             unique amounts, matching, idempotency, API views
     poller.ts             Gmail polling with a cross-instance throttle
+    devices.ts            phone pairing, device tokens, bank SMS/notification ingest
     webhooks.ts           outbox, signing, delivery with backoff
     auth.ts               sessions, login codes, API keys (all stored hashed)
     crypto.ts             AES-256-GCM secrets at rest, HMAC signing
@@ -46,7 +51,7 @@ tests/                    Vitest: parser, security, order matching, HTTP API, CO
 
 ## Security
 
-- **Tokens:** session tokens, login codes and API keys are random 256-bit values, stored only as SHA-256 hashes.
+- **Tokens:** session tokens, login codes, API keys, device tokens and pairing codes are random values, stored only as SHA-256 hashes.
 - **Encrypted at rest:** Gmail refresh tokens and webhook secrets use AES-256-GCM, with keys derived from `ENCRYPTION_KEY`.
 - **OAuth:** state is in a signed, short-lived, HttpOnly cookie. Only relative redirect paths are allowed, and a verified Google email is required.
 - **Frontend handoff:** a single-use 2-minute code, exchanged for a Bearer token. There are no cross-site cookies.

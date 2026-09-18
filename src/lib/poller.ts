@@ -36,7 +36,7 @@ async function processMessage(merchant: Merchant, msg: GmailMessage) {
   if (!alert.ok) {
     const failed = parseFailedPaymentEmail(msg.payload);
     if (failed.ok) {
-      await recordFailedPayment(merchant.id, { utr: failed.utr, amountPaise: failed.amountPaise, gmailMessageId: msg.id, receivedAt });
+      await recordFailedPayment(merchant.id, { utr: failed.utr, amountPaise: failed.amountPaise, messageId: msg.id, receivedAt });
       await log(`failed payment${failed.amountPaise ? ` ₹${formatRupees(failed.amountPaise)}` : ''}, UTR ${failed.utr}`);
       return null;
     }
@@ -46,7 +46,7 @@ async function processMessage(merchant: Merchant, msg: GmailMessage) {
 
   await log(`credit ₹${formatRupees(alert.amountPaise)}${alert.utr ? `, UTR ${alert.utr}` : ''}`);
   return recordBankCredit(merchant.id, {
-    gmailMessageId: msg.id,
+    messageId: msg.id,
     amountPaise: alert.amountPaise,
     utr: alert.utr,
     payerVpa: alert.payerVpa,

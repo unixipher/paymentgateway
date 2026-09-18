@@ -28,6 +28,7 @@ export const GET = handler(async (req: NextRequest) => {
     Promise.all([
       prisma.session.deleteMany({ where: { expiresAt: { lt: now } } }),
       prisma.loginCode.deleteMany({ where: { expiresAt: { lt: now } } }),
+      prisma.devicePairingCode.deleteMany({ where: { expiresAt: { lt: now } } }),
       prisma.rateLimit.deleteMany({ where: { windowStart: { lt: new Date(now.getTime() - 3600_000) } } }),
     ]),
   ]);
@@ -35,7 +36,7 @@ export const GET = handler(async (req: NextRequest) => {
   const result = {
     polling,
     webhooks,
-    cleanup: { sessions: cleanup[0].count, login_codes: cleanup[1].count, rate_limits: cleanup[2].count },
+    cleanup: { sessions: cleanup[0].count, login_codes: cleanup[1].count, pairing_codes: cleanup[2].count, rate_limits: cleanup[3].count },
     duration_ms: Date.now() - started,
   };
   logger.info('cron tick', result);

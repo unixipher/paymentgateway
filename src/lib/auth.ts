@@ -8,6 +8,7 @@ import { unauthorized } from './errors';
 export const SESSION_TOKEN_PREFIX = 'pgs';
 export const API_KEY_PREFIX = 'pgk_live';
 export const LOGIN_CODE_PREFIX = 'pgc';
+export const DEVICE_TOKEN_PREFIX = 'pgd';
 
 export type AuthMethod = 'session' | 'api_key';
 
@@ -17,7 +18,7 @@ export interface Principal {
   sessionId?: string;
 }
 
-const bearerToken = (req: NextRequest) => req.headers.get('authorization')?.match(/^Bearer\s+(\S+)$/i)?.[1];
+export const bearerToken = (req: NextRequest) => req.headers.get('authorization')?.match(/^Bearer\s+(\S+)$/i)?.[1];
 
 /** Resolves the merchant behind the request's `Authorization: Bearer` token, or throws 401. */
 export async function authenticate(req: NextRequest, allow: AuthMethod[]): Promise<Principal> {
