@@ -135,9 +135,9 @@ Update any of these fields (unknown fields are rejected):
 ### Paired phones
 
 - `POST /api/me/devices/pairing-code` → `201 { "code": "K7QM-2WXR", "expires_at": "…", "server_url": "https://…" }`. Single use, valid 10 minutes, and creating one cancels the previous code. Show it for the merchant to type into the app.
-- `GET /api/me/devices` → `{ "data": [{ "id": "dev_…", "name": "Samsung SM-A515F", "platform": "android", "app_version": "1.0.0", "created_at": "…", "last_seen_at": "…" }] }`. The app checks in at least every 15 minutes, so a `last_seen_at` older than about 20 minutes means the phone is offline.
+- `GET /api/me/devices` → `{ "data": [{ "id": "dev_…", "name": "Samsung SM-A515F", "platform": "android", "app_version": "1.0.0", "created_at": "…", "last_seen_at": "…" }] }`. The app checks in every 5 minutes in always-on mode and at least every 15 minutes otherwise, so a `last_seen_at` older than 20 minutes means the phone is offline.
 - `DELETE /api/me/devices/:id` → `204`. The phone's token stops working immediately.
-- `GET /api/me/device-messages` (paginated): SMS and notifications the phones forwarded, and what was decided. Each item has `id`, `device_id`, `device_name`, `channel` (`sms` | `notification`), `sender`, `received_at`, `verdict` and `recognised`.
+- `GET /api/me/device-messages` (paginated): SMS and notifications the phones forwarded, and what was decided. Each item has `id`, `device_id`, `device_name`, `channel` (`sms` | `notification`), `sender`, `verdict` and `recognised`, plus three timestamps: `received_at` (the bank sent it), `delivered_at` (the phone got it; `null` from older app versions) and `server_received_at`. `received_at` → `delivered_at` is the carrier's delay and `delivered_at` → `server_received_at` is the phone's.
 
 ## Orders
 
@@ -312,11 +312,12 @@ Unpairs the calling phone → `204`.
   "sender": "VM-HDFCBK-S",
   "title": null,
   "body": "Rs.99.01 credited to HDFC Bank A/c XX1234 from VPA payer@okaxis (UPI 425112345678)",
-  "received_at": "2026-09-18T06:15:02Z"
+  "received_at": "2026-09-18T06:15:02Z",
+  "delivered_at": "2026-09-18T06:15:04Z"
 }] }
 ```
 
-Up to 50 messages per call, processed in order → `{ "data": [{ "id": "5f0c…", "status": "credit" | "failed_payment" | "ignored", "verdict": "credit ₹99.01, UTR 425112345678", "order_id": "ord_…" | null }] }`. `id` is the app's own stable id for the message: sending it again returns the stored verdict without processing it twice, so retries are always safe. A `received_at` in the future is treated as now. Limited to 60 calls per minute per phone.
+Up to 50 messages per call, processed in order → `{ "data": [{ "id": "5f0c…", "status": "credit" | "failed_payment" | "ignored", "verdict": "credit ₹99.01, UTR 425112345678", "order_id": "ord_…" | null }] }`. `received_at` is the SMS centre's timestamp (or when the notification was posted) and is used for matching; `delivered_at` (optional) is when the phone got the message. `id` is the app's own stable id for the message: sending it again returns the stored verdict without processing it twice, so retries are always safe. A `received_at` in the future is treated as now. Limited to 60 calls per minute per phone.
 
 ## Operations
 

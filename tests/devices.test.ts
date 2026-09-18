@@ -86,7 +86,11 @@ describe.skipIf(!hasDatabase)('Android devices', () => {
     const phone = await pairPhone(merchant.id);
     const order = await createOrder(merchant, { amount: '10' }); // allowed without Gmail once a phone is paired
 
-    const message = sms('Credit Alert!\nRs.10.01 credited to HDFC Bank A/c XX1234 on 18-09-26 from VPA payer@okaxis (UPI 425100000101)');
+    const sentAt = Date.now() - 8_000;
+    const message = sms('Credit Alert!\nRs.10.01 credited to HDFC Bank A/c XX1234 on 18-09-26 from VPA payer@okaxis (UPI 425100000101)', {
+      received_at: new Date(sentAt).toISOString(),
+      delivered_at: new Date(sentAt + 5_000).toISOString(),
+    });
     const first = await send(phone.auth, [message]);
     expect(first.status).toBe(200);
     expect(first.body.data[0]).toMatchObject({ id: message.id, status: 'credit', order_id: order.id });
@@ -101,7 +105,16 @@ describe.skipIf(!hasDatabase)('Android devices', () => {
 
     const log = await listDeviceMessages(request('/api/me/device-messages', { headers: phone.session }), undefined);
     expect((await log.json()).data).toEqual([
-      expect.objectContaining({ channel: 'sms', sender: 'VM-HDFCBK-S', device_name: 'Shop phone', recognised: true, verdict: 'credit ₹10.01, UTR 425100000101' }),
+      expect.objectContaining({
+        channel: 'sms',
+        sender: 'VM-HDFCBK-S',
+        device_name: 'Shop phone',
+        recognised: true,
+        verdict: 'credit ₹10.01, UTR 425100000101',
+        received_at: new Date(sentAt).toISOString(),
+        delivered_at: new Date(sentAt + 5_000).toISOString(),
+        server_received_at: expect.any(String),
+      }),
     ]);
   });
 

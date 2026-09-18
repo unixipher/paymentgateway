@@ -221,14 +221,17 @@ model DevicePairingCode {
 /// Every SMS or notification a phone sent, and what was decided. Kept after the phone is removed.
 model DeviceMessage {
   /// `<deviceId>:<id the phone gave the message>`, so a retried upload is recognised.
-  id         String   @id
-  merchantId String   @map("merchant_id")
-  deviceId   String?  @map("device_id")
-  channel    Channel
-  sender     String
-  receivedAt DateTime @map("received_at")
-  verdict    String
-  createdAt  DateTime @default(now()) @map("created_at")
+  id          String    @id
+  merchantId  String    @map("merchant_id")
+  deviceId    String?   @map("device_id")
+  channel     Channel
+  sender      String
+  /// When the bank sent it (the SMS centre's timestamp) or the app posted the notification.
+  receivedAt  DateTime  @map("received_at")
+  /// When the phone got it. receivedAt → deliveredAt is the carrier's delay, deliveredAt → createdAt the phone's.
+  deliveredAt DateTime? @map("delivered_at")
+  verdict     String
+  createdAt   DateTime  @default(now()) @map("created_at")
 
   merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   device   Device?  @relation(fields: [deviceId], references: [id], onDelete: SetNull)

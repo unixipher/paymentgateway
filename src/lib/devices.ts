@@ -92,7 +92,10 @@ export const messagesSchema = z
             sender: z.string().trim().min(1).max(100),
             title: z.string().max(500).nullable().optional(),
             body: z.string().min(1).max(4000),
+            /** When the bank sent it (SMS centre timestamp) or the notification was posted. */
             received_at: z.iso.datetime({ offset: true }),
+            /** When the phone got it, to tell the carrier's delay from the phone's. */
+            delivered_at: z.iso.datetime({ offset: true }).nullable().optional(),
           })
           .strict(),
       )
@@ -120,6 +123,7 @@ async function processMessage(device: Device, msg: IncomingMessage): Promise<Mes
 
   // The phone's clock decides when the payment happened, but it can't claim a time in the future.
   const receivedAt = new Date(Math.min(new Date(msg.received_at).getTime(), Date.now()));
+  const deliveredAt = msg.delivered_at ? new Date(Math.min(new Date(msg.delivered_at).getTime(), Date.now())) : null;
   let orderId: string | null = null;
 
   const verdict = await (async () => {
@@ -160,6 +164,7 @@ async function processMessage(device: Device, msg: IncomingMessage): Promise<Mes
       channel: msg.channel,
       sender: msg.sender.slice(0, 100),
       receivedAt,
+      deliveredAt,
       verdict,
     }],
     skipDuplicates: true,
@@ -197,6 +202,8 @@ export function deviceMessageView(message: DeviceMessage & { device: Pick<Device
     channel: message.channel,
     sender: message.sender,
     received_at: message.receivedAt.toISOString(),
+    delivered_at: message.deliveredAt?.toISOString() ?? null,
+    server_received_at: message.createdAt.toISOString(),
     verdict: message.verdict,
     recognised: message.verdict.startsWith('credit'),
   };
