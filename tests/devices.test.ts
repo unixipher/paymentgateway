@@ -72,6 +72,15 @@ describe.skipIf(!hasDatabase)('Android devices', () => {
     expect((await deviceMe(request('/api/device/me', { headers: phone.auth }), undefined)).status).toBe(401);
   });
 
+  test('an iPhone pairs the same way', async () => {
+    const merchant = await createMerchant();
+    const session = await sessionFor(merchant.id);
+    const { code } = (await (await newPairingCode(request('/api/me/devices/pairing-code', { method: 'POST', headers: session }), undefined)).json()) as { code: string };
+    const res = await pair(request('/api/device/pair', { method: 'POST', body: { code, name: 'iPhone (iOS 26.5)', platform: 'ios', app_version: '1.0.0' } }), undefined);
+    expect(res.status).toBe(201);
+    expect(await res.json()).toMatchObject({ device: { platform: 'ios' } });
+  });
+
   test("a phone can't remove another merchant's device, and can unpair itself", async () => {
     const me = await pairPhone((await createMerchant()).id);
     const other = await pairPhone((await createMerchant()).id);

@@ -33,7 +33,7 @@ export const pairSchema = z
   .object({
     code: z.string().trim().min(8).max(20),
     name: z.string().trim().min(1).max(60),
-    platform: z.enum(['android']).default('android'),
+    platform: z.enum(['android', 'ios']).default('android'),
     app_version: z.string().trim().max(30).nullable().optional(),
   })
   .strict();

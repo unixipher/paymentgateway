@@ -298,7 +298,7 @@ A merchant's Android phone ([paymentgateway-android](../../paymentgateway-androi
 
 ### `POST /api/device/pair`
 
-No token. `{ "code": "K7QM-2WXR", "name": "Shop phone", "platform": "android", "app_version": "1.0.0" }` → `201 { "device_token": "pgd_…", "device": {…}, "merchant": { "email", "display_name" }, "rules": { "sms_senders": ["HDFCBK", …], "notification_apps": ["com.phonepe.app", …] } }`. The token is returned only here. Limited to 10 attempts per 10 minutes per IP address.
+No token. `{ "code": "K7QM-2WXR", "name": "Shop phone", "platform": "android" | "ios", "app_version": "1.0.0" }` → `201 { "device_token": "pgd_…", "device": {…}, "merchant": { "email", "display_name" }, "rules": { "sms_senders": ["HDFCBK", …], "notification_apps": ["com.phonepe.app", …] } }`. The token is returned only here. Limited to 10 attempts per 10 minutes per IP address.
 
 ### `GET /api/device/me`
 
