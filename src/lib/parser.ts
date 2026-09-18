@@ -6,7 +6,7 @@ export const DEFAULT_TRUSTED_BANK_DOMAINS = [
   'bank.in', // RBI-reserved domain that Indian banks are moving to (e.g. hdfcbank.bank.in)
   'hdfcbank.net', 'hdfcbank.com', 'sbi.co.in', 'icicibank.com', 'axisbank.com', 'kotak.com',
   'yesbank.in', 'idfcfirstbank.com', 'indusind.com', 'pnb.co.in', 'bankofbaroda.com',
-  'canarabank.com', 'unionbankofindia.co.in', 'federalbank.co.in', 'aubank.in',
+  'canarabank.com', 'unionbankofindia.co.in', 'federalbank.co.in', 'aubank.in', 'kvb.co.in',
 ];
 
 /**
@@ -15,7 +15,7 @@ export const DEFAULT_TRUSTED_BANK_DOMAINS = [
  */
 export const DEFAULT_TRUSTED_SMS_SENDERS = [
   'HDFCBK', 'SBIUPI', 'SBIINB', 'CBSSBI', 'ICICIB', 'AXISBK', 'KOTAKB', 'YESBNK', 'IDFCFB', 'INDUSB',
-  'PNBSMS', 'BOBTXN', 'BOBSMS', 'CANBNK', 'UNIONB', 'FEDBNK', 'AUBANK', 'IDBIBK',
+  'PNBSMS', 'BOBTXN', 'BOBSMS', 'CANBNK', 'UNIONB', 'FEDBNK', 'AUBANK', 'IDBIBK', 'KVBANK',
 ];
 
 /** Apps whose notifications are read: the major UPI apps. Banks' own apps can be added with TRUSTED_NOTIFICATION_APPS. */

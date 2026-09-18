@@ -73,11 +73,21 @@ export const webhookUrlSchema = z
     return url.protocol === 'https:' && !PRIVATE_HOST.test(url.hostname) && !isPrivateAddress(url.hostname);
   }, 'must be a public https:// URL');
 
+// NPCI's UPI address for a bank account without its own UPI ID: <account number>@<IFSC>.ifsc.npci.
+const BANK_ACCOUNT_VPA = /^(\d{9,18})@([a-z]{4}0[a-z0-9]{6})\.ifsc\.npci$/i;
+
 export const vpaSchema = z
   .string()
   .trim()
-  .toLowerCase()
-  .regex(/^[a-z0-9._-]{2,256}@[a-z][a-z0-9]{1,64}$/, 'must be a UPI ID like name@okhdfcbank');
+  .transform((value) => {
+    const bank = value.match(BANK_ACCOUNT_VPA);
+    // IFSC codes are written in capitals everywhere, including NPCI's own examples of this format.
+    return bank ? `${bank[1]}@${bank[2]!.toUpperCase()}.ifsc.npci` : value.toLowerCase();
+  })
+  .refine(
+    (value) => BANK_ACCOUNT_VPA.test(value) || /^[a-z0-9._-]{2,256}@[a-z][a-z0-9]{1,64}$/.test(value),
+    'must be a UPI ID like name@okhdfcbank, or a bank account as 123456789012@SBIN0001234.ifsc.npci',
+  );
 
 export const updateMerchantSchema = z
   .object({
