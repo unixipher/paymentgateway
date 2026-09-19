@@ -236,7 +236,12 @@ export async function recordBankCredit(merchantId: string, credit: BankCredit) {
       // senders are two payments.
       const twin = nearby.find((other) => !(credit.payerName && other.payerName && !namesConflict(credit.payerName, other.payerName)));
       if (twin) {
-        if (!credit.utr) return null;
+        if (!credit.utr) {
+          // Nothing new to record, unless this alert names the sender and the first didn't.
+          return !twin.payerName && credit.payerName
+            ? tx.bankTxn.update({ where: { id: twin.id }, data: { payerName: credit.payerName } })
+            : null;
+        }
         // The twin had no UTR; now it has one, which a payer's UTR claim can match.
         return tx.bankTxn.update({
           where: { id: twin.id },
@@ -246,10 +251,25 @@ export async function recordBankCredit(merchantId: string, credit: BankCredit) {
       return tx.bankTxn.create({ data: { merchantId, ...credit, channel } });
     }, TXN_OPTIONS);
   } catch (err) {
-    if (isUniqueViolation(err)) return null; // already processed, or a duplicate alert for the same UTR
+    // Already processed, or a duplicate alert for the same UTR.
+    if (isUniqueViolation(err)) return credit.utr ? fillInDuplicate(merchantId, credit) : null;
     throw err;
   }
   return txn ? matchTxn(txn) : null;
+}
+
+/**
+ * The same payment reported again (e.g. Kotak's SMS, then its email). The later alert may say who sent
+ * the money where the first didn't, which is what decides an amount several payers share. So fill that
+ * in and try matching again.
+ */
+async function fillInDuplicate(merchantId: string, credit: BankCredit) {
+  const existing = await prisma.bankTxn.findFirst({ where: { merchantId, utr: credit.utr } });
+  if (!existing || existing.orderId) return null;
+  const payerName = existing.payerName ?? credit.payerName ?? null;
+  const payerVpa = existing.payerVpa ?? credit.payerVpa;
+  if (payerName === existing.payerName && payerVpa === existing.payerVpa) return null;
+  return matchTxn(await prisma.bankTxn.update({ where: { id: existing.id }, data: { payerName, payerVpa } }));
 }
 
 async function matchTxn(txn: BankTxn) {

@@ -263,6 +263,21 @@ describe.skipIf(!hasDatabase)('payers sharing an amount by name', () => {
     expect(await statusOf(amal.id)).toBe('pending');
   });
 
+  test("Kotak's SMS has no sender name; its email for the same UTR still decides a shared amount", async () => {
+    const merchant = await createMerchant();
+    await fillAllAmounts(merchant.id);
+    const amal = await createOrder(merchant, { amount: '10', payerName: 'Amal' });
+    const dilip = await createOrder(merchant, { amount: '10', payerName: 'Dilip' });
+
+    expect(await recordBankCredit(merchant.id, { ...credit(amal.amountPaise, '425100000305'), channel: 'sms' })).toBeNull();
+    expect(await statusOf(amal.id)).toBe('pending');
+
+    const paid = await recordBankCredit(merchant.id, { ...credit(amal.amountPaise, '425100000305'), payerName: 'AMAL SEN' });
+    expect(paid?.id).toBe(amal.id);
+    expect(await statusOf(dilip.id)).toBe('pending');
+    expect(await prisma.bankTxn.count()).toBe(1);
+  });
+
   test('an email and an SMS naming different senders are two payments, not one', async () => {
     const merchant = await createMerchant();
     await fillAllAmounts(merchant.id);
