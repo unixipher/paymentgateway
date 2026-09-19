@@ -19,7 +19,7 @@ export const GET = handler(async (req: NextRequest, { params }: { params: Promis
   const { id } = await params;
   const order = await prisma.order.findUnique({
     where: { id },
-    include: { txn: { select: { utr: true, payerVpa: true, payerName: true } }, merchant: { select: { vpa: true, displayName: true, email: true } } },
+    include: { txn: { select: { utr: true, payerVpa: true, payerName: true, channel: true, receivedAt: true } }, merchant: { select: { vpa: true, displayName: true, email: true } } },
   });
   if (!order) throw notFound('Order not found');
 

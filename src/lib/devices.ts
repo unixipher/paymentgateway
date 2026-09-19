@@ -116,7 +116,7 @@ export interface MessageResult {
 const statusOf = (verdict: string): MessageResult['status'] =>
   verdict.startsWith('credit') ? 'credit' : verdict.startsWith('failed payment') ? 'failed_payment' : 'ignored';
 
-async function processMessage(device: Device, msg: IncomingMessage): Promise<MessageResult> {
+async function processMessage(device: Device & { merchant: Merchant }, msg: IncomingMessage): Promise<MessageResult> {
   const id = `${device.id}:${msg.id}`;
   const previous = await prisma.deviceMessage.findUnique({ where: { id } });
   if (previous) return { id: msg.id, status: statusOf(previous.verdict), verdict: previous.verdict, order_id: null };
@@ -127,6 +127,7 @@ async function processMessage(device: Device, msg: IncomingMessage): Promise<Mes
   let orderId: string | null = null;
 
   const verdict = await (async () => {
+    if (!device.merchant.confirmBySms) return 'ignored: phone SMS are turned off in Settings';
     const sender = msg.channel === 'sms'
       ? verifySmsSender(msg.sender, config().trustedSmsSenders)
       : verifyNotificationApp(msg.sender, config().trustedNotificationApps);
@@ -174,7 +175,7 @@ async function processMessage(device: Device, msg: IncomingMessage): Promise<Mes
 }
 
 /** Processes a batch from the phone in the order it was received. Safe to retry: each message is handled once. */
-export async function processMessages(device: Device, messages: IncomingMessage[]) {
+export async function processMessages(device: Device & { merchant: Merchant }, messages: IncomingMessage[]) {
   const results: MessageResult[] = [];
   for (const msg of messages) results.push(await processMessage(device, msg));
   return results;

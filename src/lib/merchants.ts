@@ -41,6 +41,8 @@ export function merchantView(merchant: Merchant) {
     vpa: merchant.vpa,
     display_name: merchant.displayName,
     webhook_url: merchant.webhookUrl,
+    confirm_by_email: merchant.confirmByEmail,
+    confirm_by_sms: merchant.confirmBySms,
     gmail_connected: Boolean(merchant.gmailRefreshToken),
     gmail_connected_at: merchant.gmailConnectedAt?.toISOString() ?? null,
     api_key: merchant.apiKeyHash
@@ -84,5 +86,9 @@ export const updateMerchantSchema = z
     vpa: vpaSchema.optional(),
     display_name: z.string().trim().min(1).max(50).nullable().optional(),
     webhook_url: webhookUrlSchema.nullable().optional(),
+    /** Use the bank's emails to confirm payments. */
+    confirm_by_email: z.boolean().optional(),
+    /** Use bank SMS and notifications forwarded by paired phones. */
+    confirm_by_sms: z.boolean().optional(),
   })
   .strict();

@@ -68,6 +68,12 @@ describe.skipIf(!hasDatabase)('HTTP API', () => {
     // A bank account as account@IFSC.ifsc.npci is refused: UPI apps block payments to it from a QR or link.
     const bank = await patchMe(request('/api/me', { method: 'PATCH', headers: auth, body: { vpa: '3101010000000207@KVBL0003101.ifsc.npci' } }), undefined);
     expect(bank.status).toBe(400);
+
+    // Either confirmation channel can be turned off, but not both.
+    const smsOnly = await patchMe(request('/api/me', { method: 'PATCH', headers: auth, body: { confirm_by_email: false } }), undefined);
+    expect(await smsOnly.json()).toMatchObject({ confirm_by_email: false, confirm_by_sms: true });
+    const none = await patchMe(request('/api/me', { method: 'PATCH', headers: auth, body: { confirm_by_sms: false } }), undefined);
+    expect(none.status).toBe(400);
   });
 
   test('orders API: API key auth, idempotency, merchant isolation and consistent errors', async () => {

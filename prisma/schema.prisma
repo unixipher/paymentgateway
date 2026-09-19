@@ -30,6 +30,9 @@ model Merchant {
   gmailConnectedAt  DateTime? @map("gmail_connected_at")
   vpa               String?
   displayName       String?   @map("display_name")
+  /// Which bank alerts may mark orders paid: the bank's emails (Gmail) and SMS/notifications from paired phones.
+  confirmByEmail    Boolean   @default(true) @map("confirm_by_email")
+  confirmBySms      Boolean   @default(true) @map("confirm_by_sms")
   webhookUrl        String?   @map("webhook_url")
   /// AES-256-GCM encrypted. Stored reversibly because it is needed to sign webhook payloads.
   webhookSecret     String    @map("webhook_secret")

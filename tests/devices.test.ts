@@ -10,7 +10,7 @@ import { GET as listDevices } from '@/app/api/me/devices/route';
 import { GET as getOrderRoute } from '@/app/api/v1/orders/[id]/route';
 import { createLoginCode } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import { claimUtr, createOrder, getOrder, recordBankCredit } from '@/lib/orders';
+import { claimUtr, createOrder, getOrder, merchantOrderView, recordBankCredit } from '@/lib/orders';
 import { hasDatabase } from './setup';
 import { createMerchant, credit, params, request, resetDatabase } from './helpers';
 
@@ -106,6 +106,8 @@ describe.skipIf(!hasDatabase)('Android devices', () => {
 
     const paid = await getOrder(order.id);
     expect(paid).toMatchObject({ status: 'paid', txn: { utr: '425100000101', payerVpa: 'payer@okaxis' } });
+    // The payment took from order creation until the SMS arrived, and the order says it came by SMS.
+    expect(merchantOrderView(paid!)).toMatchObject({ paid_via: 'sms', alert_received_at: new Date(sentAt).toISOString() });
     expect(await prisma.bankTxn.findFirst({ where: { merchantId: merchant.id } })).toMatchObject({ channel: 'sms', bankDomain: 'VM-HDFCBK-S' });
 
     const retry = await send(phone.auth, [message]);
@@ -133,6 +135,18 @@ describe.skipIf(!hasDatabase)('Android devices', () => {
     await send(phone.auth, [message]);
     expect(await prisma.bankTxn.count()).toBe(1);
     expect(await getOrder(order.id)).toMatchObject({ status: 'paid' });
+  });
+
+  test('with phone SMS turned off in Settings, a bank SMS is logged but pays nothing', async () => {
+    const merchant = await createMerchant();
+    const phone = await pairPhone(merchant.id);
+    await prisma.merchant.update({ where: { id: merchant.id }, data: { confirmBySms: false } });
+    const order = await createOrder(merchant, { amount: '10' });
+
+    const { body } = await send(phone.auth, [sms('Rs.10.01 credited to A/c XX1234 from VPA payer@okaxis (UPI 425100000104)')]);
+    expect(body.data[0]).toMatchObject({ status: 'ignored', verdict: 'ignored: phone SMS are turned off in Settings' });
+    expect(await getOrder(order.id)).toMatchObject({ status: 'pending' });
+    expect(await prisma.bankTxn.count()).toBe(0);
   });
 
   test('SMS from untrusted senders and non-credit messages never pay', async () => {

@@ -14,9 +14,9 @@ const MAX_BASE_PAISE = 99_999_00; // UPI P2P limit is ₹1,00,000 and we add up 
 const TXN_OPTIONS = { maxWait: 15_000, timeout: 15_000 };
 const ago = (ms: number, from = Date.now()) => new Date(from - ms);
 
-export type OrderWithTxn = Order & { txn: Pick<BankTxn, 'utr' | 'payerVpa' | 'payerName'> | null };
+export type OrderWithTxn = Order & { txn: Pick<BankTxn, 'utr' | 'payerVpa' | 'payerName' | 'channel' | 'receivedAt'> | null };
 export type OrderState = 'pending' | 'paid' | 'failed' | 'cancelled';
-const withTxn = { txn: { select: { utr: true, payerVpa: true, payerName: true } } } as const;
+const withTxn = { txn: { select: { utr: true, payerVpa: true, payerName: true, channel: true, receivedAt: true } } } as const;
 
 /**
  * `failed` means no payment arrived in time: the payment window plus a short "checking with your bank"
@@ -100,8 +100,13 @@ export async function createOrder(merchant: Merchant, input: CreateOrderInput): 
   if (!vpaSchema.safeParse(merchant.vpa).success) {
     throw new ApiError(409, 'merchant_not_configured', 'Your payee address is not a UPI ID. Set a UPI ID like name@okhdfcbank in Settings.');
   }
-  if (!merchant.gmailRefreshToken && !(await prisma.device.count({ where: { merchantId: merchant.id } }))) {
-    throw new ApiError(409, 'gmail_not_connected', 'Connect Gmail or pair a phone, so payments can be verified.');
+  // At least one channel that's turned on must be able to deliver bank alerts.
+  const emailReady = merchant.confirmByEmail && Boolean(merchant.gmailRefreshToken);
+  const smsReady = merchant.confirmBySms && Boolean(await prisma.device.count({ where: { merchantId: merchant.id } }));
+  if (!emailReady && !smsReady) {
+    throw new ApiError(409, 'gmail_not_connected', merchant.confirmByEmail
+      ? 'Connect Gmail or pair a phone, so payments can be verified.'
+      : 'Bank emails are turned off in Settings. Pair a phone, or turn bank emails back on.');
   }
 
   const basePaise = rupeesToPaise(input.amount);
@@ -353,8 +358,12 @@ async function markPaid(orderId: string, txnId: string) {
   }
   scheduleDelivery([webhookId]);
   const paid = await getOrder(orderId);
-  if (paid?.paidAt) {
-    logger.info('order paid', { orderId, durationMs: paid.paidAt.getTime() - paid.createdAt.getTime() });
+  if (paid?.paidAt && paid.txn) {
+    logger.info('order paid', {
+      orderId,
+      via: paid.txn.channel,
+      durationMs: paid.txn.receivedAt.getTime() - paid.createdAt.getTime(),
+    });
   }
   return paid;
 }
@@ -450,6 +459,10 @@ export function merchantOrderView(order: OrderWithTxn, now = Date.now()) {
     payer_name: order.payerName,
     /** Who the bank says sent the money. */
     paid_by: order.txn?.payerName ?? null,
+    /** How the payment was confirmed: the bank's `email`, or an `sms` or app `notification` forwarded by a phone. */
+    paid_via: order.txn?.channel ?? null,
+    /** When that bank alert arrived. The payment took `alert_received_at − created_at`. */
+    alert_received_at: iso(order.txn?.receivedAt ?? null),
     claimed_utr: order.claimedUtr,
     created_at: iso(order.createdAt),
     expires_at: iso(order.expiresAt),
@@ -478,6 +491,8 @@ export function publicOrderView(order: OrderWithTxn, merchant: Pick<Merchant, 'v
     utr_submitted: Boolean(order.claimedUtr),
     /** The name the payer gave; they should pay from a bank account in this name. */
     payer_name: order.payerName,
+    paid_via: order.txn?.channel ?? null,
+    alert_received_at: iso(order.txn?.receivedAt ?? null),
     created_at: iso(order.createdAt),
     expires_at: iso(order.expiresAt),
     paid_at: iso(order.paidAt),

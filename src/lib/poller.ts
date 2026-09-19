@@ -58,7 +58,8 @@ async function processMessage(merchant: Merchant, msg: GmailMessage) {
 
 /** Reads bank emails received since `since` and matches them to orders. Returns how many orders got paid. */
 export async function pollMerchant(merchant: Merchant, since: Date): Promise<number> {
-  if (!merchant.gmailRefreshToken) return 0;
+  // Turned off in Settings: the bank's emails don't confirm payments, so don't read them.
+  if (!merchant.gmailRefreshToken || !merchant.confirmByEmail) return 0;
   try {
     const token = await gmailAccessToken(merchant.id, decrypt(merchant.gmailRefreshToken));
     // Narrow the search to bank senders; verifySender still does the real check on each message.
@@ -120,6 +121,7 @@ export async function pollIfDue(merchantId: string): Promise<number> {
     where: {
       id: merchantId,
       gmailRefreshToken: { not: null },
+      confirmByEmail: true,
       OR: [{ lastPolledAt: null }, { lastPolledAt: { lt: new Date(now - config().pollIntervalMs) } }],
     },
     data: { lastPolledAt: new Date(now) },
