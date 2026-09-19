@@ -5,7 +5,8 @@ import {
 } from '@/lib/orders';
 import { hasDatabase } from './setup';
 import { randomId } from '@/lib/crypto';
-import { createMerchant, credit, resetDatabase } from './helpers';
+import { GET as getCheckout } from '@/app/api/public/orders/[id]/route';
+import { createMerchant, credit, params, request, resetDatabase } from './helpers';
 
 const statusOf = async (id: string) => (await getOrder(id))?.status;
 
@@ -146,10 +147,41 @@ describe.skipIf(!hasDatabase)('failed orders', () => {
   const expire = (id: string, minutesAgo: number) =>
     prisma.order.update({ where: { id }, data: { expiresAt: new Date(Date.now() - minutesAgo * 60_000) } });
 
+  const openLink = async (id: string) => {
+    const res = await getCheckout(request(`/api/public/orders/${id}`), params({ id }));
+    return (await res.json()) as { status: string; opened_at: string | null; expires_at: string };
+  };
+
+  test("the payment timer starts when the payer opens the link, not when it's created", async () => {
+    const merchant = await createMerchant();
+    const order = await createOrder(merchant, { amount: '10' });
+    expect(order.openedAt).toBeNull();
+    expect(order.expiresAt.getTime() - order.createdAt.getTime()).toBe(24 * 60 * 60_000);
+    expect(merchantOrderView(order)).toMatchObject({ status: 'pending', opened_at: null });
+
+    const before = Date.now();
+    const first = await openLink(order.id);
+    expect(first.status).toBe('pending');
+    const openedAt = new Date(first.opened_at!).getTime();
+    expect(openedAt).toBeGreaterThanOrEqual(before);
+    expect(new Date(first.expires_at).getTime() - openedAt).toBe(2 * 60_000);
+
+    // Reloading the page doesn't restart the timer.
+    const again = await openLink(order.id);
+    expect(again).toMatchObject({ opened_at: first.opened_at, expires_at: first.expires_at });
+  });
+
+  test('a link nobody opened fails once it expires, and opening it then does not revive it', async () => {
+    const merchant = await createMerchant();
+    const order = await createOrder(merchant, { amount: '10' });
+    await expire(order.id, 2);
+    const opened = await openLink(order.id);
+    expect(opened).toMatchObject({ status: 'failed', opened_at: null });
+  });
+
   test('an order fails after the payment window plus the checking minute, not before', async () => {
     const merchant = await createMerchant();
     const order = await createOrder(merchant, { amount: '10' });
-    expect(order.expiresAt.getTime() - order.createdAt.getTime()).toBe(2 * 60_000);
 
     await expire(order.id, 0.5);
     expect(merchantOrderView((await getOrder(order.id))!).status).toBe('pending');

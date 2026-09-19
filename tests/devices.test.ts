@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from 'vitest';
 import { POST as createSession } from '@/app/api/auth/session/route';
+import { GET as deviceDashboard } from '@/app/api/device/dashboard/route';
 import { DELETE as unpairSelf, GET as deviceMe } from '@/app/api/device/me/route';
 import { POST as sendMessages } from '@/app/api/device/messages/route';
 import { POST as pair } from '@/app/api/device/pair/route';
@@ -181,6 +182,30 @@ describe.skipIf(!hasDatabase)('Android devices', () => {
     const { body } = await send(phone.auth, [sms('UPI txn of Rs 10.01 failed. Amount will be credited back to A/c XX1234. Ref 425100000105')]);
     expect(body.data[0]?.status).toBe('failed_payment');
     await expect(claimUtr(order.id, '425100000105')).rejects.toMatchObject({ code: 'payment_failed' });
+  });
+
+  test("the app's dashboard lists every credit, paid order or not, and today's totals", async () => {
+    const merchant = await createMerchant();
+    const other = await createMerchant({ email: 'other@example.com' });
+    const phone = await pairPhone(merchant.id);
+    const order = await createOrder(merchant, { amount: '10', note: 'Chai' });
+    await send(phone.auth, [sms('Rs.10.01 credited to A/c XX1234 (UPI 425100000301)')]);
+    await recordBankCredit(merchant.id, { ...credit(50000, '425100000302'), payerName: 'Asha' });
+    await recordBankCredit(other.id, credit(777, '425100000303'));
+
+    const res = await deviceDashboard(request('/api/device/dashboard', { headers: phone.auth }), undefined);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      today: { collected_paise: number; payments: number; received_paise: number; credits: number };
+      credits: { amount: string; payer_name: string | null; channel: string; order_id: string | null; order_note: string | null }[];
+    };
+    expect(body.today).toMatchObject({ collected_paise: 1001, payments: 1, received_paise: 51001, credits: 2 });
+    expect(body.credits.map((c) => c.amount)).toEqual(['500.00', '10.01']);
+    expect(body.credits[0]).toMatchObject({ payer_name: 'Asha', channel: 'email', order_id: null });
+    expect(body.credits[1]).toMatchObject({ channel: 'sms', order_id: order.id, order_note: 'Chai' });
+
+    const session = await sessionFor(merchant.id);
+    expect((await deviceDashboard(request('/api/device/dashboard', { headers: session }), undefined)).status).toBe(401);
   });
 
   describe('the same payment reported by both the bank email and the phone', () => {

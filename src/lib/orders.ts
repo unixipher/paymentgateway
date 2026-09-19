@@ -143,7 +143,8 @@ export async function createOrder(merchant: Merchant, input: CreateOrderInput): 
           idempotencyKey: input.idempotencyKey ?? null,
           payerName: input.payerName ?? null,
           createdAt: new Date(now),
-          expiresAt: new Date(now + config().orderTtlMs),
+          // The payment timer starts when the payer opens the link (openCheckout); until then the link just stays valid.
+          expiresAt: new Date(now + config().linkTtlMs),
         },
         include: withTxn,
       });
@@ -186,6 +187,26 @@ export async function listOrders(merchantId: string, opts: { limit: number; curs
   });
   const page = rows.slice(0, opts.limit);
   return { data: page, nextCursor: rows.length > opts.limit ? page.at(-1)?.id ?? null : null };
+}
+
+/**
+ * The payer opened the checkout link: the first time, this starts the payment timer. Opening it again,
+ * or after the link expired, changes nothing.
+ */
+export async function openCheckout<T extends Order>(order: T, now = Date.now()): Promise<T> {
+  if (order.openedAt || orderState(order, now) !== 'pending' || now > order.expiresAt.getTime()) return order;
+  const openedAt = new Date(now);
+  const expiresAt = new Date(now + config().orderTtlMs);
+  // Conditional, so two tabs opening at once start one timer.
+  const { count } = await prisma.order.updateMany({
+    where: { id: order.id, status: 'pending', openedAt: null },
+    data: { openedAt, expiresAt },
+  });
+  if (!count) {
+    const current = await prisma.order.findUniqueOrThrow({ where: { id: order.id }, select: { status: true, openedAt: true, expiresAt: true } });
+    return { ...order, ...current };
+  }
+  return { ...order, openedAt, expiresAt };
 }
 
 export async function cancelOrder(merchantId: string, id: string) {
@@ -485,6 +506,8 @@ export function merchantOrderView(order: OrderWithTxn, now = Date.now()) {
     alert_received_at: iso(order.txn?.receivedAt ?? null),
     claimed_utr: order.claimedUtr,
     created_at: iso(order.createdAt),
+    /** When the payer first opened the link. Null: not opened yet, and `expires_at` is when the link stops working. */
+    opened_at: iso(order.openedAt),
     expires_at: iso(order.expiresAt),
     paid_at: iso(order.paidAt),
     cancelled_at: iso(order.cancelledAt),
@@ -514,6 +537,7 @@ export function publicOrderView(order: OrderWithTxn, merchant: Pick<Merchant, 'v
     paid_via: order.txn?.channel ?? null,
     alert_received_at: iso(order.txn?.receivedAt ?? null),
     created_at: iso(order.createdAt),
+    opened_at: iso(order.openedAt),
     expires_at: iso(order.expiresAt),
     paid_at: iso(order.paidAt),
   };

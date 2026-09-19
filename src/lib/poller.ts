@@ -100,7 +100,8 @@ async function merchantsWithOpenOrders(now: number, merchantId?: string) {
       ...(merchantId && { merchantId }),
       status: 'pending',
       OR: [
-        { expiresAt: { gte: new Date(now - graceMs) } },
+        // A link nobody has opened can't have been paid (the payer hasn't seen the amount), so it needs no checks.
+        { openedAt: { not: null }, expiresAt: { gte: new Date(now - graceMs) } },
         { claimedUtr: { not: null }, createdAt: { gte: new Date(now - claimWindowMs) } },
       ],
     },

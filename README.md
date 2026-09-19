@@ -31,7 +31,7 @@ src/
     api/me/…              merchant settings, API key, webhook secret, delivery log, bank emails, scan
     api/v1/orders/…       orders API (API key or session)
     api/public/orders/…   checkout: status, QR PNG, UTR claim (CORS: any origin)
-    api/device/…          Android app: pairing, heartbeat, forwarded bank SMS/notifications
+    api/device/…          Phone app: pairing, heartbeat, forwarded bank SMS/notifications, dashboard
     api/me/devices/…      pairing codes, paired phones, forwarded-message log
     api/cron/tick         Gmail polling, webhook retries, cleanup
     api/health

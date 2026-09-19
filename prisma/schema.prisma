@@ -111,7 +111,10 @@ model Order {
   failureNotifiedAt DateTime? @map("failure_notified_at")
   createdAt      DateTime    @default(now()) @map("created_at")
   updatedAt      DateTime    @default(now()) @updatedAt @map("updated_at")
+  /// Until the payer opens the link: how long the link stays valid. From then on: the end of the payment timer.
   expiresAt      DateTime    @map("expires_at")
+  /// When the payer first opened the checkout link, which starts the payment timer.
+  openedAt       DateTime?   @map("opened_at")
   paidAt         DateTime?   @map("paid_at")
   cancelledAt    DateTime?   @map("cancelled_at")
 

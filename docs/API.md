@@ -158,15 +158,15 @@ Use an **API key** from the merchant's server, or a **session token** from the d
   "redirect_url": "https://shop.example/thanks",
   "checkout_url": "https://dashboard.example.com/pay/ord_…",
   "utr": null, "payer_vpa": null, "payer_name": "Amal Das", "paid_by": null, "claimed_utr": null,
-  "created_at": "…", "expires_at": "…", "paid_at": null, "cancelled_at": null
+  "created_at": "…", "opened_at": null, "expires_at": "…", "paid_at": null, "cancelled_at": null
 }
 ```
 
 | `status` | Meaning |
 |---|---|
-| `pending` | Waiting for payment: until `expires_at` (2 minutes by default, `ORDER_TTL_MINUTES`), plus 1 minute for the bank's email to arrive. If the payer submitted a UTR, the order stays `pending` for up to 24 hours. |
+| `pending` | Waiting for payment. The payment timer starts when the payer first opens the checkout link (`opened_at`): from then they have until `expires_at` (2 minutes by default, `ORDER_TTL_MINUTES`), plus 1 minute for the bank's email to arrive. Before it's opened, `opened_at` is `null` and `expires_at` is when the link stops working (24 hours after creation by default, `LINK_TTL_MINUTES`). If the payer submitted a UTR, the order stays `pending` for up to 24 hours. |
 | `paid` | A verified bank credit matched this order. `utr` is set. |
-| `failed` | No payment arrived in time. `failure_reason` is `payment_not_received`. The payer should be offered a new order. **Late payments:** if the bank email arrives up to 10 minutes after `expires_at`, the order still becomes `paid` and `order.paid` is sent, so don't release goods only on `failed`, and handle a `paid` that follows it (e.g. refund or fulfil). |
+| `failed` | No payment arrived in time, or nobody opened the link before it expired. The checkout page then shows the link as failed and no longer offers the QR code. `failure_reason` is `payment_not_received`. The payer should be offered a new order. **Late payments:** if the bank email arrives up to 10 minutes after `expires_at`, the order still becomes `paid` and `order.paid` is sent, so don't release goods only on `failed`, and handle a `paid` that follows it (e.g. refund or fulfil). |
 | `cancelled` | Cancelled by the merchant. It will never be marked paid. |
 
 **Why `amount` differs from `base_amount`:** every open order gets a unique paise amount (₹99.01, ₹99.02, …), which is how a bank alert email is matched to exactly one order. The payer must pay `amount` exactly.
@@ -224,9 +224,11 @@ These endpoints are for the payer's checkout page, which is typically `/pay/:id`
   "qr_url": "https://api.example.com/api/public/orders/ord_…/qr",
   "redirect_url": "https://shop.example/thanks",
   "utr": null, "utr_submitted": false,
-  "created_at": "…", "expires_at": "…", "paid_at": null
+  "created_at": "…", "opened_at": "…", "expires_at": "…", "paid_at": null
 }
 ```
+
+**The first call starts the payer's timer:** it sets `opened_at` to now and `expires_at` to `ORDER_TTL_MINUTES` later, and the response already carries both. Later calls (reloads, other tabs) don't restart it. Call it only from the payer's checkout page. A merchant previewing the link would start the payer's timer.
 
 **Poll this every 3–5 seconds while `status` is `pending`.** Each call also triggers a Gmail check (at most once per 15 s per merchant). That's how payments are detected when no cron job is running. Stop polling once the status is `paid` or `cancelled`. After `failed`, polling every 10 s for a few more minutes lets the page show a late payment.
 
@@ -323,6 +325,10 @@ Unpairs the calling phone → `204`.
 ```
 
 Up to 50 messages per call, processed in order → `{ "data": [{ "id": "5f0c…", "status": "credit" | "failed_payment" | "ignored", "verdict": "credit ₹99.01, UTR 425112345678", "order_id": "ord_…" | null }] }`. `received_at` is the SMS centre's timestamp (or when the notification was posted) and is used for matching; `delivered_at` (optional) is when the phone got the message. `id` is the app's own stable id for the message: sending it again returns the stored verdict without processing it twice, so retries are always safe. A `received_at` in the future is treated as now. Limited to 60 calls per minute per phone.
+
+### `GET /api/device/dashboard`
+
+The app's home screen and payment sound. Returns the same fields as `GET /api/me/stats`, with `today` extended by `received` / `received_paise` / `credits` (every bank credit received today in India time, whether or not it paid an order), plus `merchant` and `credits`: the latest 30 bank credits, newest first, each `{ "id", "amount": "99.01", "amount_paise", "payer_name", "payer_vpa", "utr", "channel": "email" | "sms" | "notification", "received_at", "created_at", "order_id", "order_note" }`. A payment reported by both email and SMS appears once. The app announces each credit id it hasn't announced before, if its `created_at` is within the last 10 minutes; on the first load after pairing it announces nothing. Limited to 60 calls per minute per phone.
 
 ## Operations
 
