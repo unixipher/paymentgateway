@@ -3,7 +3,7 @@ import { POST as createSession } from '@/app/api/auth/session/route';
 import { DELETE as unpairSelf, GET as deviceMe } from '@/app/api/device/me/route';
 import { POST as sendMessages } from '@/app/api/device/messages/route';
 import { POST as pair } from '@/app/api/device/pair/route';
-import { GET as listDeviceMessages } from '@/app/api/me/device-messages/route';
+import { DELETE as clearDeviceMessages, GET as listDeviceMessages } from '@/app/api/me/device-messages/route';
 import { DELETE as removeDevice } from '@/app/api/me/devices/[id]/route';
 import { POST as newPairingCode } from '@/app/api/me/devices/pairing-code/route';
 import { GET as listDevices } from '@/app/api/me/devices/route';
@@ -125,6 +125,14 @@ describe.skipIf(!hasDatabase)('Android devices', () => {
         server_received_at: expect.any(String),
       }),
     ]);
+
+    // Clearing the log keeps the payment, and a re-sent message still can't pay twice.
+    const cleared = await clearDeviceMessages(request('/api/me/device-messages', { method: 'DELETE', headers: phone.session }), undefined);
+    expect(cleared.status).toBe(204);
+    expect(await prisma.deviceMessage.count()).toBe(0);
+    await send(phone.auth, [message]);
+    expect(await prisma.bankTxn.count()).toBe(1);
+    expect(await getOrder(order.id)).toMatchObject({ status: 'paid' });
   });
 
   test('SMS from untrusted senders and non-credit messages never pay', async () => {
