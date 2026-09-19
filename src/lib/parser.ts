@@ -11,10 +11,10 @@ export const DEFAULT_TRUSTED_BANK_DOMAINS = [
 
 /**
  * Core of the DLT sender header banks send SMS alerts from: "VM-HDFCBK-S" → HDFCBK. Indian operators
- * only deliver SMS from a registered header with an operator prefix, so a stranger can't send from one.
+ * only deliver SMS from a registered header, so a stranger can't send from one. KOTAKD is Kotak811.
  */
 export const DEFAULT_TRUSTED_SMS_SENDERS = [
-  'HDFCBK', 'SBIUPI', 'SBIINB', 'CBSSBI', 'ICICIB', 'AXISBK', 'KOTAKB', 'YESBNK', 'IDFCFB', 'INDUSB',
+  'HDFCBK', 'SBIUPI', 'SBIINB', 'CBSSBI', 'ICICIB', 'AXISBK', 'KOTAKB', 'KOTAKD', 'YESBNK', 'IDFCFB', 'INDUSB',
   'PNBSMS', 'BOBTXN', 'BOBSMS', 'CANBNK', 'UNIONB', 'FEDBNK', 'AUBANK', 'IDBIBK', 'KVBANK',
 ];
 
@@ -28,7 +28,8 @@ export const DEFAULT_TRUSTED_NOTIFICATION_APPS = [
 
 export function verifySmsSender(sender: string, trustedSenders: string[]): SenderCheck {
   // Real DLT headers: 2 letter operator/circle prefix, 6 character header, optional type suffix (-S, -T, -P, -G).
-  const core = sender.trim().toUpperCase().match(/^[A-Z]{2}-([A-Z0-9]{6})(?:-[A-Z])?$/)?.[1];
+  // iPhones show them without the prefix ("KOTAKD-S"), so it's optional.
+  const core = sender.trim().toUpperCase().match(/^(?:[A-Z]{2}-)?([A-Z0-9]{6})(?:-[A-Z])?$/)?.[1];
   if (!core) return { ok: false, reason: `sender ${sender} is not a bank SMS header` };
   if (!trustedSenders.includes(core)) return { ok: false, reason: `sender ${sender} is not a trusted bank` };
   return { ok: true, domain: sender.trim().toUpperCase() };

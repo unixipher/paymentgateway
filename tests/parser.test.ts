@@ -174,11 +174,11 @@ describe('bank SMS and app notifications', () => {
     expect(parseCreditAlert('UPI txn of Rs 10.01 failed. Amount will be credited back to A/c XX1234. Ref 425100000005').ok).toBe(false);
   });
 
-  test.each(['VM-HDFCBK', 'JD-HDFCBK-S', 'ax-sbiupi-t'])('trusted SMS sender %s', (sender) => {
+  test.each(['VM-HDFCBK', 'JD-HDFCBK-S', 'ax-sbiupi-t', 'KOTAKD-S', 'HDFCBK'])('trusted SMS sender %s', (sender) => {
     expect(verifySmsSender(sender, DEFAULT_TRUSTED_SMS_SENDERS).ok).toBe(true);
   });
 
-  test.each(['+919812345678', 'HDFCBK', 'VM-HDFCBX', 'VM-HDFCBK-SPAM', 'VM-HDFCBK1'])('untrusted SMS sender %s', (sender) => {
+  test.each(['+919812345678', 'HDFCBX-S', 'VM-HDFCBX', 'VM-HDFCBK-SPAM', 'VM-HDFCBK1'])('untrusted SMS sender %s', (sender) => {
     expect(verifySmsSender(sender, DEFAULT_TRUSTED_SMS_SENDERS).ok).toBe(false);
   });
 
