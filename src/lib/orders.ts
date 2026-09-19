@@ -362,10 +362,30 @@ async function markPaid(orderId: string, txnId: string) {
     logger.info('order paid', {
       orderId,
       via: paid.txn.channel,
-      durationMs: paid.txn.receivedAt.getTime() - paid.createdAt.getTime(),
+      // Bank alert arrived → marked paid: how fast we confirmed it.
+      confirmMs: paid.paidAt.getTime() - paid.txn.receivedAt.getTime(),
+      payerMs: paid.txn.receivedAt.getTime() - paid.createdAt.getTime(),
     });
   }
   return paid;
+}
+
+/**
+ * The payer gives their name on the checkout page, when the merchant didn't. Set once. The amount
+ * stays as allocated: it was unique (orders without a name never share one), and from now on the name
+ * lets later payers with clearly different names share it.
+ */
+export async function setPayerName(orderId: string, name: string) {
+  const order = await getOrder(orderId);
+  if (!order) throw notFound('Order not found');
+  if (order.payerName) {
+    if (order.payerName === name) return order;
+    throw conflict('This payment already has a payer name');
+  }
+  const state = orderState(order);
+  if (state !== 'pending') throw new ApiError(410, 'gone', `This order is ${state}`);
+  await prisma.order.updateMany({ where: { id: orderId, status: 'pending', payerName: null }, data: { payerName: name } });
+  return (await getOrder(orderId))!;
 }
 
 export async function claimUtr(orderId: string, utr: string) {
@@ -461,7 +481,7 @@ export function merchantOrderView(order: OrderWithTxn, now = Date.now()) {
     paid_by: order.txn?.payerName ?? null,
     /** How the payment was confirmed: the bank's `email`, or an `sms` or app `notification` forwarded by a phone. */
     paid_via: order.txn?.channel ?? null,
-    /** When that bank alert arrived. The payment took `alert_received_at − created_at`. */
+    /** When that bank alert arrived. `paid_at − alert_received_at` is how fast it was confirmed. */
     alert_received_at: iso(order.txn?.receivedAt ?? null),
     claimed_utr: order.claimedUtr,
     created_at: iso(order.createdAt),

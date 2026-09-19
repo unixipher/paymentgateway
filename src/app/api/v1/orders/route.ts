@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authenticate } from '@/lib/auth';
 import { badRequest } from '@/lib/errors';
 import { handler, json, paginationQuery, readJson, searchParams } from '@/lib/http';
+import { payerNameSchema } from '@/lib/names';
 import { createOrder, listOrders, merchantOrderView } from '@/lib/orders';
 import { rateLimit } from '@/lib/rate-limit';
 
@@ -12,7 +13,7 @@ const createOrderSchema = z
     note: z.string().trim().min(1).max(50).optional(),
     redirect_url: z.url({ protocol: /^https?$/ }).max(500).optional(),
     /** Name on the bank account the payer will pay from, if you ask them. */
-    payer_name: z.string().trim().min(2).max(60).regex(/[A-Za-z]{2}/, 'must contain letters').optional(),
+    payer_name: payerNameSchema.optional(),
     metadata: z
       .record(z.string().max(40), z.string().max(500))
       .refine((m) => Object.keys(m).length <= 20, 'at most 20 keys')

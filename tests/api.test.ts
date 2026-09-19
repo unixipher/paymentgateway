@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, test } from 'vitest';
 import { POST as createSession, DELETE as deleteSession } from '@/app/api/auth/session/route';
 import { GET as cronTick } from '@/app/api/cron/tick/route';
 import { GET as getMe, PATCH as patchMe } from '@/app/api/me/route';
+import { GET as getStats } from '@/app/api/me/stats/route';
+import { POST as setPayer } from '@/app/api/public/orders/[id]/payer/route';
 import { POST as rotateApiKey } from '@/app/api/me/api-key/route';
 import { GET as publicOrder } from '@/app/api/public/orders/[id]/route';
 import { POST as claim } from '@/app/api/public/orders/[id]/claim/route';
@@ -51,6 +53,35 @@ describe.skipIf(!hasDatabase)('HTTP API', () => {
 
     expect((await deleteSession(request('/api/auth/session', { method: 'DELETE', headers: auth }), undefined)).status).toBe(204);
     expect((await getMe(request('/api/me', { headers: auth }), undefined)).status).toBe(401);
+  });
+
+  test('the payer gives their name on the checkout page, once', async () => {
+    const merchant = await createMerchant();
+    const order = await createOrder(merchant, { amount: '10' });
+    const url = `/api/public/orders/${order.id}/payer`;
+
+    const bad = await setPayer(request(url, { method: 'POST', body: { name: '12' } }), params({ id: order.id }));
+    expect(bad.status).toBe(400);
+    const ok = await setPayer(request(url, { method: 'POST', body: { name: ' Amal Das ' } }), params({ id: order.id }));
+    expect(await ok.json()).toMatchObject({ payer_name: 'Amal Das', status: 'pending' });
+    const same = await setPayer(request(url, { method: 'POST', body: { name: 'Amal Das' } }), params({ id: order.id }));
+    expect(same.status).toBe(200);
+    const other = await setPayer(request(url, { method: 'POST', body: { name: 'Dilip Roy' } }), params({ id: order.id }));
+    expect(other.status).toBe(409);
+  });
+
+  test('dashboard stats count today and the last 7 days', async () => {
+    const merchant = await createMerchant();
+    const { body } = await signIn(merchant.id);
+    const auth = { authorization: `Bearer ${body.token}` };
+    const order = await createOrder(merchant, { amount: '10' });
+    await createOrder(merchant, { amount: '20' });
+    await recordBankCredit(merchant.id, credit(order.amountPaise, '425100000901'));
+
+    const stats = await (await getStats(request('/api/me/stats', { headers: auth }), undefined)).json();
+    expect(stats).toMatchObject({ today: { collected_paise: order.amountPaise, payments: 1 }, open_orders: 1, success_rate_7d: 1 });
+    expect(stats.days).toHaveLength(7);
+    expect(stats.days.at(-1)).toMatchObject({ collected_paise: order.amountPaise, payments: 1 });
   });
 
   test('settings are validated', async () => {

@@ -1,3 +1,4 @@
+import { z } from 'zod';
 // Comparing the name a payer typed with the name their bank puts in its credit alert.
 //
 // Banks print the account holder's name, often in capitals, abbreviated or cut short: "AMAL KUMAR S",
@@ -42,3 +43,6 @@ export function nameMatchesAlert(typed: string, alertName: string): boolean {
   const alertWords = nameWords(alertName);
   return nameWords(typed).some((word) => word.length > 1 && alertWords.some((a) => a.length > 1 && wordsMatch(word, a)));
 }
+
+/** A payer's name as the merchant or the payer enters it: the name on the bank account they pay from. */
+export const payerNameSchema = z.string().trim().min(2).max(60).regex(/[A-Za-z]{2}/, 'must contain letters');
