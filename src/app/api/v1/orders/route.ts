@@ -50,5 +50,8 @@ export const GET = handler(async (req: NextRequest) => {
   const { merchant } = await authenticate(req, ['api_key', 'session']);
   const { limit, cursor, status } = listQuery.parse(searchParams(req));
   const { data, nextCursor } = await listOrders(merchant.id, { limit, cursor, state: status });
-  return json({ data: data.map(merchantOrderView), next_cursor: nextCursor });
+  // One clock for the whole page, and never `map(merchantOrderView)`: map would pass the array
+  // index as `now`, so every expired order would read back as still pending.
+  const now = Date.now();
+  return json({ data: data.map((order) => merchantOrderView(order, now)), next_cursor: nextCursor });
 });

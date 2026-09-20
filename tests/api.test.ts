@@ -138,6 +138,35 @@ describe.skipIf(!hasDatabase)('HTTP API', () => {
     expect(foreign.status).toBe(404);
   });
 
+  test('every order in a filtered list carries its own computed status', async () => {
+    // merchantOrderView takes `now` as its second argument, so list.map(merchantOrderView) passed it
+    // the array index: with now=0 every expired order came back "pending" under the Failed filter.
+    const merchant = await createMerchant();
+    const key = await apiKeyFor(merchant.id);
+    const ids: string[] = [];
+    for (const amount of ['1', '2', '3']) {
+      const res = await createOrderRoute(
+        request('/api/v1/orders', { method: 'POST', headers: { authorization: `Bearer ${key}` }, body: { amount } }),
+        undefined,
+      );
+      ids.push(((await res.json()) as { id: string }).id);
+    }
+    // All three ran out of time an hour ago.
+    await prisma.order.updateMany({ where: { id: { in: ids } }, data: { expiresAt: new Date(Date.now() - 3600_000) } });
+
+    const list = await listOrdersRoute(
+      request('/api/v1/orders?status=failed', { headers: { authorization: `Bearer ${key}` } }),
+      undefined,
+    );
+    const { data } = (await list.json()) as { data: { status: string; failure_reason: string | null }[] };
+    expect(data).toHaveLength(3);
+    // Every row, not just the first: the index-as-`now` bug spared row 0 only by accident.
+    for (const order of data) {
+      expect(order.status).toBe('failed');
+      expect(order.failure_reason).toBe('payment_not_received');
+    }
+  });
+
   test('public checkout exposes only what the payer needs', async () => {
     const merchant = await createMerchant({ displayName: 'Ice Cream Co' });
     const key = await apiKeyFor(merchant.id);
