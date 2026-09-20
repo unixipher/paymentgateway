@@ -26,7 +26,7 @@ async function processMessage(merchant: Merchant, msg: GmailMessage) {
       skipDuplicates: true,
     });
 
-  const sender = verifySender(headers, config().trustedBankDomains);
+  const sender = verifySender(headers, config().trustedBankDomains, merchant.bankKey);
   if (!sender.ok) {
     await log(`ignored: ${sender.reason}`);
     return null;

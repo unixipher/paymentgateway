@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Merchant } from '@/generated/prisma/client';
 import { encrypt, randomId, randomToken } from './crypto';
 import { prisma } from './db';
+import { bankChoices } from './dlt';
 import { config } from './env';
 import type { GoogleIdentity } from './google';
 
@@ -39,6 +40,7 @@ export function merchantView(merchant: Merchant) {
     object: 'merchant',
     email: merchant.email,
     vpa: merchant.vpa,
+    bank: merchant.bankKey,
     display_name: merchant.displayName,
     webhook_url: merchant.webhookUrl,
     confirm_by_email: merchant.confirmByEmail,
@@ -81,9 +83,20 @@ export const vpaSchema = z
   .toLowerCase()
   .regex(/^[a-z0-9._-]{2,256}@[a-z][a-z0-9]{1,64}$/, 'must be a UPI ID like name@okhdfcbank');
 
+/**
+ * The bank the merchant's UPI ID pays into. This is the bank holding the account, which is not
+ * always the bank in the UPI handle: paying into an HDFC account through PhonePe gives a `@ybl`
+ * handle, and the credit alert still comes from HDFC.
+ */
+export const bankSchema = z
+  .string()
+  .trim()
+  .refine((key) => bankChoices().some((bank) => bank.key === key), 'must be a bank from GET /api/banks');
+
 export const updateMerchantSchema = z
   .object({
     vpa: vpaSchema.optional(),
+    bank: bankSchema.nullable().optional(),
     display_name: z.string().trim().min(1).max(50).nullable().optional(),
     webhook_url: webhookUrlSchema.nullable().optional(),
     /** Use the bank's emails to confirm payments. */

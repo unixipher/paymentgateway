@@ -20,6 +20,7 @@ export const PATCH = handler(async (req: NextRequest) => {
     where: { id: merchant.id },
     data: {
       ...(body.vpa !== undefined && { vpa: body.vpa }),
+      ...(body.bank !== undefined && { bankKey: body.bank }),
       ...(body.display_name !== undefined && { displayName: body.display_name }),
       ...(body.webhook_url !== undefined && { webhookUrl: body.webhook_url }),
       ...(body.confirm_by_email !== undefined && { confirmByEmail: body.confirm_by_email }),

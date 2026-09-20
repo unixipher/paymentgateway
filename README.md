@@ -17,7 +17,7 @@ UPI payments to a merchant's own UPI ID, verified automatically by reading their
 
 If a payer's app rounds the amount, they can submit their 12-digit UTR on the checkout page. An exact-amount match always wins over a UTR claim.
 
-**Bank SMS** reach the backend within seconds when the merchant pairs an Android phone (dashboard → Phones). Each SMS goes through the same parser and matching as an email. It must come from a registered bank sender header, and one payment reported by both email and SMS is counted once. See [docs/API.md](docs/API.md#android-app-bank-sms).
+**Bank SMS** reach the backend within seconds when the merchant pairs an Android phone (dashboard → Phones). Each SMS goes through the same parser and matching as an email. It must arrive from a header TRAI's register says a bank holds, and one payment reported by both email and SMS is counted once. See [docs/API.md](docs/API.md#android-app-bank-sms) and [data/trai/README.md](data/trai/README.md).
 
 Gmail is checked **on demand**, when the checkout page polls the order status (at most once per 15 s per merchant), and **by a cron** every minute if one is configured.
 
@@ -38,6 +38,10 @@ src/
   proxy.ts                CORS and security headers
   lib/
     parser.ts             bank email → verified credit (pure, heavily tested)
+    reconcile.ts          flags phone-reported payments the bank's email never confirmed
+    dlt.ts                bank SMS sender headers, checked against TRAI's register
+    banks.ts              the banks we can recognise by name, in the register and in an alert
+    sms-headers.generated.ts  every header TRAI assigned to a bank (built from data/trai/)
     orders.ts             unique amounts, matching, idempotency, API views
     poller.ts             Gmail polling with a cross-instance throttle
     devices.ts            phone pairing, device tokens, bank SMS/notification ingest
@@ -45,6 +49,7 @@ src/
     auth.ts               sessions, login codes, API keys (all stored hashed)
     crypto.ts             AES-256-GCM secrets at rest, HMAC signing
     env.ts                validated configuration
+data/trai/                TRAI's register of SMS headers, and what it is used for
 prisma/                   schema and migrations
 tests/                    Vitest: parser, security, order matching, HTTP API, CORS
 ```
@@ -58,6 +63,9 @@ tests/                    Vitest: parser, security, order matching, HTTP API, CO
 - **Isolation:** every row belongs to one merchant, and every query filters by it.
 - **Rate limits:** stored in Postgres, so they hold across serverless instances. Sign-in, checkout status, QR codes, UTR claims, order creation and scans are all limited.
 - **Webhooks:** HMAC-SHA256 signatures that include a timestamp, and in production only public HTTPS targets are allowed.
+- **The merchant's bank:** a merchant can name the bank their UPI ID pays into, and an alert from any other bank is then refused, by email and SMS alike.
+- **Checked twice:** a payment a phone reported is looked at again about 45 minutes later. A phone can forge an SMS, but not the bank's DKIM-signed email, so a payment no email ever confirmed raises `payment.unverified` and is marked in the dashboard. It is flagged, not undone.
+- **Bank SMS:** an alert counts only if its sender header passes every check TRAI's own framework allows — a real operator and service-area prefix, a non-promotional message type, a header the register says a **bank** holds, and, when both are recognisable, agreement between that bank and the bank the alert names. See [data/trai/README.md](data/trai/README.md).
 - **Validation:** Zod on every input, and unknown fields are rejected. Errors return a consistent JSON shape and never include internals.
 
 ## Setup

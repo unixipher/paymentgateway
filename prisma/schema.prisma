@@ -29,6 +29,9 @@ model Merchant {
   gmailRefreshToken String?   @map("gmail_refresh_token")
   gmailConnectedAt  DateTime? @map("gmail_connected_at")
   vpa               String?
+  /// The bank holding the account the merchant's UPI ID pays into, as a key from lib/banks.ts.
+  /// Set, it refuses any alert from another bank; null means they have not said.
+  bankKey           String?   @map("bank_key")
   displayName       String?   @map("display_name")
   /// Which bank alerts may mark orders paid: the bank's emails (Gmail) and SMS/notifications from paired phones.
   confirmByEmail    Boolean   @default(true) @map("confirm_by_email")
@@ -151,6 +154,11 @@ model BankTxn {
   /// Who sent the alert: the email domain, SMS sender (e.g. VM-HDFCBK-S) or app package.
   bankDomain  String   @map("bank_domain")
   receivedAt  DateTime @map("received_at")
+  /// When a DKIM/DMARC-verified bank email corroborated this credit. A paired phone can forge an
+  /// SMS but not the bank's email, so a credit no email confirms is only as good as the phone.
+  emailConfirmedAt DateTime? @map("email_confirmed_at")
+  /// Set once the payment.unverified webhook has been queued, so it is sent at most once.
+  unverifiedNotifiedAt DateTime? @map("unverified_notified_at")
   /// A bank credit can pay at most one order.
   orderId        String?  @unique @map("order_id")
   createdAt      DateTime @default(now()) @map("created_at")
@@ -161,6 +169,7 @@ model BankTxn {
   @@unique([merchantId, messageId])
   /// The same UTR can never be counted twice.
   @@unique([merchantId, utr])
+  @@index([emailConfirmedAt, receivedAt])
   @@map("bank_txns")
 }
 

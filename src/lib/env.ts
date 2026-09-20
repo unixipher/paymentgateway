@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DEFAULT_TRUSTED_BANK_DOMAINS, DEFAULT_TRUSTED_NOTIFICATION_APPS, DEFAULT_TRUSTED_SMS_SENDERS } from './parser';
+import { DEFAULT_TRUSTED_BANK_DOMAINS, DEFAULT_TRUSTED_NOTIFICATION_APPS } from './parser';
 
 const csv = z
   .string()
@@ -28,8 +28,10 @@ const schema = z.object({
   ORDER_TTL_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(2),
   /** How long a link nobody has opened stays valid. It holds its unique amount until then. */
   LINK_TTL_MINUTES: z.coerce.number().int().min(1).max(7 * 24 * 60).default(24 * 60),
+  /** How long a phone-reported payment may wait for the bank's email before it is flagged. */
+  RECONCILE_AFTER_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(45),
   TRUSTED_BANK_DOMAINS: csv,
-  /** Extra bank SMS sender headers, without the operator prefix (e.g. HDFCBK). */
+  /** Bank SMS headers beyond the ones TRAI's register lists, without the operator prefix (e.g. HDFCBK). */
   TRUSTED_SMS_SENDERS: csv,
   /** Extra Android app packages whose notifications count as bank alerts. */
   TRUSTED_NOTIFICATION_APPS: csv,
@@ -68,12 +70,13 @@ function load() {
     graceMs: 10 * MINUTE,
     /** How long a payer can still submit a UTR for an order they paid the wrong amount for. */
     claimWindowMs: 24 * 60 * MINUTE,
+    reconcileAfterMs: env.RECONCILE_AFTER_MINUTES * MINUTE,
     clockSkewMs: 2 * MINUTE,
     sessionTtlMs: 30 * 24 * 60 * MINUTE,
     loginCodeTtlMs: 2 * MINUTE,
     pairingCodeTtlMs: 10 * MINUTE,
     trustedBankDomains: [...DEFAULT_TRUSTED_BANK_DOMAINS, ...env.TRUSTED_BANK_DOMAINS.map((d) => d.toLowerCase())],
-    trustedSmsSenders: [...DEFAULT_TRUSTED_SMS_SENDERS, ...env.TRUSTED_SMS_SENDERS.map((s) => s.toUpperCase())],
+    trustedSmsSenders: env.TRUSTED_SMS_SENDERS.map((s) => s.toUpperCase()),
     trustedNotificationApps: [...DEFAULT_TRUSTED_NOTIFICATION_APPS, ...env.TRUSTED_NOTIFICATION_APPS],
   };
 }

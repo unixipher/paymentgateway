@@ -16,7 +16,7 @@ export const POST = handler(async (req: NextRequest, { params }: { params: Promi
 
   const order = await prisma.order.findUniqueOrThrow({
     where: { id },
-    include: { txn: { select: { utr: true, payerVpa: true, payerName: true, channel: true, receivedAt: true } }, merchant: { select: { vpa: true, displayName: true, email: true } } },
+    include: { txn: { select: { utr: true, payerVpa: true, payerName: true, channel: true, receivedAt: true, emailConfirmedAt: true } }, merchant: { select: { vpa: true, displayName: true, email: true } } },
   });
   return json(publicOrderView(order, order.merchant));
 });

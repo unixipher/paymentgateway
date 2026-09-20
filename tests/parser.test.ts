@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import { rupeesToPaise } from '@/lib/money';
+import { verifyNotificationApp, verifySmsSender } from '@/lib/dlt';
 import {
-  DEFAULT_TRUSTED_BANK_DOMAINS as TRUSTED, DEFAULT_TRUSTED_NOTIFICATION_APPS, DEFAULT_TRUSTED_SMS_SENDERS, parseCreditAlert,
-  parseCreditEmail, parseFailedPayment, verifyNotificationApp, verifySender, verifySmsSender, type GmailHeader,
+  DEFAULT_TRUSTED_BANK_DOMAINS as TRUSTED, DEFAULT_TRUSTED_NOTIFICATION_APPS, parseCreditAlert,
+  parseCreditEmail, parseFailedPayment, verifySender, type GmailHeader,
 } from '@/lib/parser';
 
 const gmailAuth = (value: string): GmailHeader => ({ name: 'Authentication-Results', value });
@@ -175,11 +176,11 @@ describe('bank SMS and app notifications', () => {
   });
 
   test.each(['VM-HDFCBK', 'JD-HDFCBK-S', 'ax-sbiupi-t', 'KOTAKD-S', 'HDFCBK'])('trusted SMS sender %s', (sender) => {
-    expect(verifySmsSender(sender, DEFAULT_TRUSTED_SMS_SENDERS).ok).toBe(true);
+    expect(verifySmsSender(sender).ok).toBe(true);
   });
 
   test.each(['+919812345678', 'HDFCBX-S', 'VM-HDFCBX', 'VM-HDFCBK-SPAM', 'VM-HDFCBK1'])('untrusted SMS sender %s', (sender) => {
-    expect(verifySmsSender(sender, DEFAULT_TRUSTED_SMS_SENDERS).ok).toBe(false);
+    expect(verifySmsSender(sender).ok).toBe(false);
   });
 
   test('notifications count only from trusted apps', () => {

@@ -256,7 +256,7 @@ The payer enters the 12-digit UPI reference number from their UPI app. Offer thi
 
 ## Webhooks
 
-The backend sends a `POST` to the merchant's `webhook_url` when an order is paid (`order.paid`) and when it fails because no payment arrived in time (`order.failed`, sent once, within about a minute of failing when a cron runs or the checkout page is open):
+The backend sends a `POST` to the merchant's `webhook_url` when an order is paid (`order.paid`), when it fails because no payment arrived in time (`order.failed`, sent once, within about a minute of failing when a cron runs or the checkout page is open), and when a phone-reported payment is never confirmed by the bank's email (`payment.unverified`):
 
 ```http
 POST /hooks/upi
@@ -272,6 +272,7 @@ X-Webhook-Signature: t=1789640000,v1=5f2c…
 - Failed deliveries are retried after 1 min, 5 min, 30 min, 2 h, 6 h, 12 h and 24 h (8 attempts in total). After that the delivery is marked `failed`, and you can retry it from the delivery log.
 - A delivery can arrive more than once. **Deduplicate on `X-Webhook-Id`** (or the order `id`).
 - Events are recorded in the same database transaction as the change they report, so they are never lost.
+- `payment.unverified` means a payment a phone reported was never confirmed by the bank's email. Its `data` carries `order_id`, `amount`, `utr`, `channel`, `sender`, `received_at` and `reason`. The order stays `paid`; treat it as a prompt to check that payment against the bank statement.
 - `order.paid` can follow `order.failed` for the same order when the bank's email was late.
 
 **Verify every webhook** before trusting it. Compute an HMAC-SHA256 with your webhook secret over `<t>.<raw request body>`, compare it to `v1`, and reject timestamps more than 5 minutes old:
@@ -294,7 +295,24 @@ Use the **raw** body exactly as received, not re-serialised JSON.
 
 A merchant's Android phone ([paymentgateway-android](../../paymentgateway-android)) forwards bank SMS and UPI app notifications the moment they arrive. They go through the same parser as bank emails, so a credit pays its order within seconds instead of waiting for the email. Gmail keeps working alongside it, and a merchant with a paired phone can create orders without Gmail.
 
-**What counts as genuine.** An SMS counts only if it comes from a registered bank sender header (`VM-HDFCBK`, `JD-SBIUPI-S`, …; the operator prefix is required, so a phone number never passes). The trusted headers are the defaults in `lib/parser.ts` plus `TRUSTED_SMS_SENDERS`. A notification counts only if it comes from a trusted app package (Google Pay, PhonePe, Paytm and BHIM by default, plus `TRUSTED_NOTIFICATION_APPS`). The device token is what vouches for the phone, so treat a phone's token like an API key: remove the phone from the dashboard if it is lost.
+**The merchant's own bank.** A merchant can say which bank their UPI ID pays into (`bank` on `PATCH /api/me`, chosen from `GET /api/banks`). Once set, an alert from any other bank is refused outright, by email and by SMS alike — it is about somebody else's account. Left unset, alerts from any bank are accepted. This is the bank **holding the account**, which is not always the bank in the UPI handle: paying into an HDFC account through PhonePe gives a `@ybl` handle, and the credit alert still comes from HDFC.
+
+### `GET /api/banks`
+
+No auth. `{ "object": "list", "data": [{ "key": "hdfc", "name": "HDFC BANK LIMITED" }, …] }` — every bank in TRAI's register, for the settings dropdown. Cacheable for a day.
+
+**What counts as genuine.** An SMS counts only if it arrives from a bank's registered sender header (`VM-HDFCBK`, `JD-SBIUPI-S`, …), which a phone number can never be. The header is checked against TRAI's published register of who holds each header, in `lib/dlt.ts`:
+
+- the operator and service-area prefix, when present, must be codes TRAI assigned (an iPhone shows the header without them, so they are optional);
+- the message type suffix must be `-S`, `-T` or `-G`; a `-P` promotional message is not a bank alert;
+- the header itself must be one TRAI's register says a **bank** holds — 1,582 headers across 673 banks, including co-operative, small finance and regional banks, plus anything in `TRUSTED_SMS_SENDERS`;
+- if the alert names a bank we recognise, it must be the bank that holds the header, so one bank's alert text cannot arrive under another's header.
+
+The rejected reason is recorded in the message log, so a refused alert says which check it failed. A notification counts only if it comes from a trusted app package (Google Pay, PhonePe, Paytm and BHIM by default, plus `TRUSTED_NOTIFICATION_APPS`). The device token is what vouches for the phone, so treat a phone's token like an API key: remove the phone from the dashboard if it is lost.
+
+**Checked again against the bank's email.** A paired phone is trusted to forward SMS, so a tampered phone could post a message that looks like a credit alert with an invented UTR — nothing in the message itself would give that away. The bank's email can't be forged that way, because it carries Gmail's own DKIM/DMARC verdict. So every payment a phone reported is looked at again about 45 minutes later (`RECONCILE_AFTER_MINUTES`), and one that no bank email ever confirmed raises **`payment.unverified`** and shows `email_confirmed: false` on the order.
+
+The payment is **not** undone: by then the goods may be with the customer, and what to do is the merchant's call. The sweep is skipped for merchants who have bank emails turned off, have no Gmail connected, or whose email channel has never confirmed anything — a bank that sends no email must not make every genuine payment look suspect.
 
 **Same payment, two alerts.** One payment is usually reported by both the bank's email and its SMS. With the same UTR it is counted once. If one of the two alerts has no UTR, a credit of the same amount from the other channel within 15 minutes is treated as the same payment, and the UTR, if either alert has one, is kept.
 
@@ -333,4 +351,4 @@ The app's home screen and payment sound. Returns the same fields as `GET /api/me
 ## Operations
 
 - `GET /api/health` → `200 {"status":"ok","database":"up"}`, or `503` if the database is down.
-- `GET /api/cron/tick` with `Authorization: Bearer <CRON_SECRET>` checks Gmail for merchants with open orders, sends `order.failed` webhooks, retries due webhooks, and deletes expired sessions, login codes, pairing codes and rate-limit rows. Run it every minute.
+- `GET /api/cron/tick` with `Authorization: Bearer <CRON_SECRET>` checks Gmail for merchants with open orders, flags phone-reported payments no bank email confirmed, sends `order.failed` webhooks, retries due webhooks, and deletes expired sessions, login codes, pairing codes and rate-limit rows. Run it every minute.

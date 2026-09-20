@@ -10,7 +10,8 @@ import { config } from './env';
 import { unauthorized } from './errors';
 import { formatRupees } from './money';
 import { recordBankCredit, recordFailedPayment } from './orders';
-import { parseCreditAlert, parseFailedPayment, verifyNotificationApp, verifySmsSender } from './parser';
+import { allBankHeaders, verifyNotificationApp, verifySmsSender } from './dlt';
+import { parseCreditAlert, parseFailedPayment } from './parser';
 
 // ---- Pairing ----
 
@@ -128,12 +129,16 @@ async function processMessage(device: Device & { merchant: Merchant }, msg: Inco
 
   const verdict = await (async () => {
     if (!device.merchant.confirmBySms) return 'ignored: phone SMS are turned off in Settings';
+    const text = [msg.title, msg.body].filter(Boolean).join(' ');
     const sender = msg.channel === 'sms'
-      ? verifySmsSender(msg.sender, config().trustedSmsSenders)
+      ? verifySmsSender(msg.sender, {
+        extraTrusted: config().trustedSmsSenders,
+        text,
+        expectedBank: device.merchant.bankKey,
+      })
       : verifyNotificationApp(msg.sender, config().trustedNotificationApps);
     if (!sender.ok) return `ignored: ${sender.reason}`;
 
-    const text = [msg.title, msg.body].filter(Boolean).join(' ');
     const alert = parseCreditAlert(text);
     if (!alert.ok) {
       const failed = parseFailedPayment(text);
@@ -213,6 +218,6 @@ export function deviceMessageView(message: DeviceMessage & { device: Pick<Device
 
 /** What the app needs to decide which SMS and notifications to forward. */
 export const forwardingRules = () => ({
-  sms_senders: config().trustedSmsSenders,
+  sms_senders: allBankHeaders(config().trustedSmsSenders),
   notification_apps: config().trustedNotificationApps,
 });

@@ -11,7 +11,7 @@ const TIMEOUT_MS = 10_000;
 /** Signatures older than this should be rejected by receivers (replay protection). */
 export const SIGNATURE_TOLERANCE_SECONDS = 300;
 
-export type WebhookEvent = 'order.paid' | 'order.failed';
+export type WebhookEvent = 'order.paid' | 'order.failed' | 'payment.unverified';
 
 /** `X-Webhook-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>` */
 export function signWebhook(secret: string, body: string, timestamp = Math.floor(Date.now() / 1000)): string {

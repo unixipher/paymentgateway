@@ -1,5 +1,7 @@
 // Pure functions that turn a Gmail API message into "was this a genuine UPI credit, and for how much".
 // No I/O here so it can be unit tested with real sample emails.
+import { bankKeyForDomain } from './banks';
+import type { SenderCheck } from './dlt';
 import { rupeesToPaise } from './money';
 
 export const DEFAULT_TRUSTED_BANK_DOMAINS = [
@@ -9,15 +11,6 @@ export const DEFAULT_TRUSTED_BANK_DOMAINS = [
   'canarabank.com', 'unionbankofindia.co.in', 'federalbank.co.in', 'aubank.in', 'kvb.co.in',
 ];
 
-/**
- * Core of the DLT sender header banks send SMS alerts from: "VM-HDFCBK-S" → HDFCBK. Indian operators
- * only deliver SMS from a registered header, so a stranger can't send from one. KOTAKD is Kotak811.
- */
-export const DEFAULT_TRUSTED_SMS_SENDERS = [
-  'HDFCBK', 'SBIUPI', 'SBIINB', 'CBSSBI', 'ICICIB', 'AXISBK', 'KOTAKB', 'KOTAKD', 'YESBNK', 'IDFCFB', 'INDUSB',
-  'PNBSMS', 'BOBTXN', 'BOBSMS', 'CANBNK', 'UNIONB', 'FEDBNK', 'AUBANK', 'IDBIBK', 'KVBANK',
-];
-
 /** Apps whose notifications are read: the major UPI apps. Banks' own apps can be added with TRUSTED_NOTIFICATION_APPS. */
 export const DEFAULT_TRUSTED_NOTIFICATION_APPS = [
   'com.google.android.apps.nbu.paisa.user', // Google Pay
@@ -25,21 +18,6 @@ export const DEFAULT_TRUSTED_NOTIFICATION_APPS = [
   'net.one97.paytm',
   'in.org.npci.upiapp', // BHIM
 ];
-
-export function verifySmsSender(sender: string, trustedSenders: string[]): SenderCheck {
-  // Real DLT headers: 2 letter operator/circle prefix, 6 character header, optional type suffix (-S, -T, -P, -G).
-  // iPhones show them without the prefix ("KOTAKD-S"), so it's optional.
-  const core = sender.trim().toUpperCase().match(/^(?:[A-Z]{2}-)?([A-Z0-9]{6})(?:-[A-Z])?$/)?.[1];
-  if (!core) return { ok: false, reason: `sender ${sender} is not a bank SMS header` };
-  if (!trustedSenders.includes(core)) return { ok: false, reason: `sender ${sender} is not a trusted bank` };
-  return { ok: true, domain: sender.trim().toUpperCase() };
-}
-
-export function verifyNotificationApp(packageName: string, trustedApps: string[]): SenderCheck {
-  return trustedApps.includes(packageName)
-    ? { ok: true, domain: packageName }
-    : { ok: false, reason: `app ${packageName} is not trusted` };
-}
 
 export interface GmailHeader {
   name: string;
@@ -53,7 +31,6 @@ export interface GmailPart {
   parts?: GmailPart[];
 }
 
-export type SenderCheck = { ok: true; domain: string } | { ok: false; reason: string };
 export type CreditAlert =
   | { ok: true; amountPaise: number; utr: string | null; payerVpa: string | null; payerName: string | null }
   | { ok: false; reason: string };
@@ -64,11 +41,21 @@ export const header = (headers: GmailHeader[], name: string): string =>
 const domainMatches = (domain: string, trusted: string) => domain === trusted || domain.endsWith(`.${trusted}`);
 const aligned = (a: string, b: string) => domainMatches(a, b) || domainMatches(b, a);
 
-export function verifySender(headers: GmailHeader[], trustedDomains: string[]): SenderCheck {
+export function verifySender(
+  headers: GmailHeader[],
+  trustedDomains: string[],
+  /** The bank the merchant says their account is with; mail from another bank is not theirs. */
+  expectedBank: string | null = null,
+): SenderCheck {
   const fromDomain = header(headers, 'From').match(/@([a-z0-9.-]+)>?\s*$/i)?.[1]?.toLowerCase();
   if (!fromDomain) return { ok: false, reason: 'no sender address' };
   if (!trustedDomains.some((t) => domainMatches(fromDomain, t))) {
     return { ok: false, reason: `sender ${fromDomain} is not a trusted bank` };
+  }
+  // Domains shared by many banks, like the RBI's bank.in, name no one bank, so they narrow nothing.
+  const sendingBank = bankKeyForDomain(fromDomain);
+  if (expectedBank && sendingBank && sendingBank !== expectedBank) {
+    return { ok: false, reason: `sender ${fromDomain} is not the bank this account is with` };
   }
 
   // Anyone can send an email with "From: alerts@hdfcbank.net". What can't be faked is Gmail's own

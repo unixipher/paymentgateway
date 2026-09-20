@@ -14,9 +14,15 @@ const MAX_BASE_PAISE = 99_999_00; // UPI P2P limit is ₹1,00,000 and we add up 
 const TXN_OPTIONS = { maxWait: 15_000, timeout: 15_000 };
 const ago = (ms: number, from = Date.now()) => new Date(from - ms);
 
-export type OrderWithTxn = Order & { txn: Pick<BankTxn, 'utr' | 'payerVpa' | 'payerName' | 'channel' | 'receivedAt'> | null };
+export type OrderWithTxn = Order & {
+  txn: Pick<BankTxn, 'utr' | 'payerVpa' | 'payerName' | 'channel' | 'receivedAt' | 'emailConfirmedAt'> | null;
+};
 export type OrderState = 'pending' | 'paid' | 'failed' | 'cancelled';
-const withTxn = { txn: { select: { utr: true, payerVpa: true, payerName: true, channel: true, receivedAt: true } } } as const;
+const withTxn = {
+  txn: {
+    select: { utr: true, payerVpa: true, payerName: true, channel: true, receivedAt: true, emailConfirmedAt: true },
+  },
+} as const;
 
 /**
  * `failed` means no payment arrived in time: the payment window plus a short "checking with your bank"
@@ -262,19 +268,30 @@ export async function recordBankCredit(merchantId: string, credit: BankCredit) {
       // senders are two payments.
       const twin = nearby.find((other) => !(credit.payerName && other.payerName && !namesConflict(credit.payerName, other.payerName)));
       if (twin) {
+        // An email for a credit a phone reported is the corroboration the phone cannot forge.
+        const corroborated = channel === 'email' && !twin.emailConfirmedAt
+          ? { emailConfirmedAt: credit.receivedAt }
+          : {};
         if (!credit.utr) {
           // Nothing new to record, unless this alert names the sender and the first didn't.
-          return !twin.payerName && credit.payerName
-            ? tx.bankTxn.update({ where: { id: twin.id }, data: { payerName: credit.payerName } })
-            : null;
+          const named = !twin.payerName && credit.payerName ? { payerName: credit.payerName } : {};
+          if (!Object.keys({ ...named, ...corroborated }).length) return null;
+          return tx.bankTxn.update({ where: { id: twin.id }, data: { ...named, ...corroborated } });
         }
         // The twin had no UTR; now it has one, which a payer's UTR claim can match.
         return tx.bankTxn.update({
           where: { id: twin.id },
-          data: { utr: credit.utr, payerVpa: twin.payerVpa ?? credit.payerVpa, payerName: twin.payerName ?? credit.payerName ?? null },
+          data: {
+            utr: credit.utr,
+            payerVpa: twin.payerVpa ?? credit.payerVpa,
+            payerName: twin.payerName ?? credit.payerName ?? null,
+            ...corroborated,
+          },
         });
       }
-      return tx.bankTxn.create({ data: { merchantId, ...credit, channel } });
+      return tx.bankTxn.create({
+        data: { merchantId, ...credit, channel, emailConfirmedAt: channel === 'email' ? credit.receivedAt : null },
+      });
     }, TXN_OPTIONS);
   } catch (err) {
     // Already processed, or a duplicate alert for the same UTR.
@@ -291,7 +308,15 @@ export async function recordBankCredit(merchantId: string, credit: BankCredit) {
  */
 async function fillInDuplicate(merchantId: string, credit: BankCredit) {
   const existing = await prisma.bankTxn.findFirst({ where: { merchantId, utr: credit.utr } });
-  if (!existing || existing.orderId) return null;
+  if (!existing) return null;
+
+  // The bank's own email for a UTR a phone already reported. This is what makes the credit real,
+  // so record it even when the order it paid is long settled.
+  if ((credit.channel ?? 'email') === 'email' && !existing.emailConfirmedAt) {
+    await prisma.bankTxn.update({ where: { id: existing.id }, data: { emailConfirmedAt: credit.receivedAt } });
+  }
+
+  if (existing.orderId) return null;
   const payerName = existing.payerName ?? credit.payerName ?? null;
   const payerVpa = existing.payerVpa ?? credit.payerVpa;
   if (payerName === existing.payerName && payerVpa === existing.payerVpa) return null;
@@ -502,6 +527,11 @@ export function merchantOrderView(order: OrderWithTxn, now = Date.now()) {
     paid_by: order.txn?.payerName ?? null,
     /** How the payment was confirmed: the bank's `email`, or an `sms` or app `notification` forwarded by a phone. */
     paid_via: order.txn?.channel ?? null,
+    /**
+     * Whether the bank's own email has confirmed this payment. A phone can forge an SMS but not a
+     * DKIM-signed email, so a payment a phone reported is fully verified only once this is true.
+     */
+    email_confirmed: order.txn ? order.txn.emailConfirmedAt !== null : null,
     /** When that bank alert arrived. `paid_at − alert_received_at` is how fast it was confirmed. */
     alert_received_at: iso(order.txn?.receivedAt ?? null),
     claimed_utr: order.claimedUtr,
