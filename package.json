@@ -12,6 +12,7 @@
     "build": "next build",
     "vercel-build": "if [ \"$VERCEL_ENV\" = production ]; then prisma migrate deploy || (sleep 20 && prisma migrate deploy); fi && next build",
     "start": "next start",
+    "worker": "tsx src/worker.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "generate": "prisma generate",
@@ -27,6 +28,7 @@
     "qrcode": "^1.5.4",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "tsx": "^4.23.15",
     "zod": "^4.6.5"
   },
   "devDependencies": {

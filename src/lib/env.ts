@@ -24,6 +24,8 @@ const schema = z.object({
   /** Required to call /api/cron/tick. Vercel Cron sends it automatically as a Bearer token. */
   CRON_SECRET: z.string().min(16).optional(),
   POLL_INTERVAL_SECONDS: z.coerce.number().int().min(5).default(15),
+  /** Delay between background worker cycles when running outside a serverless platform. */
+  WORKER_INTERVAL_SECONDS: z.coerce.number().int().min(5).max(3600).default(15),
   /** How long the payer has to pay, counted from when they open the checkout link. */
   ORDER_TTL_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(2),
   /** How long a link nobody has opened stays valid. It holds its unique amount until then. */
@@ -62,6 +64,7 @@ function load() {
     corsOrigins: new Set([new URL(frontendUrl).origin, ...env.CORS_ORIGINS.map((o) => new URL(o).origin)]),
     cronSecret: env.CRON_SECRET,
     pollIntervalMs: env.POLL_INTERVAL_SECONDS * 1000,
+    workerIntervalMs: env.WORKER_INTERVAL_SECONDS * 1000,
     orderTtlMs: env.ORDER_TTL_MINUTES * MINUTE,
     linkTtlMs: env.LINK_TTL_MINUTES * MINUTE,
     /** After the payment window closes, how long checkout keeps saying "checking with your bank" before the order is failed. */

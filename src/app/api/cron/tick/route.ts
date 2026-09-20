@@ -1,13 +1,9 @@
 import type { NextRequest } from 'next/server';
 import { safeEqual } from '@/lib/crypto';
-import { prisma } from '@/lib/db';
 import { config } from '@/lib/env';
 import { ApiError, unauthorized } from '@/lib/errors';
 import { handler, json } from '@/lib/http';
-import { logger } from '@/lib/logger';
-import { pollAllDue } from '@/lib/poller';
-import { flagUnverifiedCredits } from '@/lib/reconcile';
-import { deliverDueWebhooks } from '@/lib/webhooks';
+import { runBackgroundTick } from '@/lib/tick';
 
 export const maxDuration = 60;
 
@@ -21,28 +17,5 @@ export const GET = handler(async (req: NextRequest) => {
   const token = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
   if (!safeEqual(token, secret)) throw unauthorized();
 
-  const started = Date.now();
-  const now = new Date();
-  // Reconciliation runs after polling, so an email that arrived this minute counts.
-  const polling = await pollAllDue();
-  const [reconciliation, webhooks, cleanup] = await Promise.all([
-    flagUnverifiedCredits(now),
-    deliverDueWebhooks(),
-    Promise.all([
-      prisma.session.deleteMany({ where: { expiresAt: { lt: now } } }),
-      prisma.loginCode.deleteMany({ where: { expiresAt: { lt: now } } }),
-      prisma.devicePairingCode.deleteMany({ where: { expiresAt: { lt: now } } }),
-      prisma.rateLimit.deleteMany({ where: { windowStart: { lt: new Date(now.getTime() - 3600_000) } } }),
-    ]),
-  ]);
-
-  const result = {
-    polling,
-    reconciliation,
-    webhooks,
-    cleanup: { sessions: cleanup[0].count, login_codes: cleanup[1].count, pairing_codes: cleanup[2].count, rate_limits: cleanup[3].count },
-    duration_ms: Date.now() - started,
-  };
-  logger.info('cron tick', result);
-  return json(result);
+  return json(await runBackgroundTick());
 });

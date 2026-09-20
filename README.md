@@ -19,7 +19,7 @@ If a payer's app rounds the amount, they can submit their 12-digit UTR on the ch
 
 **Bank SMS** reach the backend within seconds when the merchant pairs an Android phone (dashboard → Phones). Each SMS goes through the same parser and matching as an email. It must arrive from a header TRAI's register says a bank holds, and one payment reported by both email and SMS is counted once. See [docs/API.md](docs/API.md#android-app-bank-sms) and [data/trai/README.md](data/trai/README.md).
 
-Gmail is checked **on demand**, when the checkout page polls the order status (at most once per 15 s per merchant), and **by a cron** every minute if one is configured.
+Gmail is checked **on demand**, when the checkout page polls the order status (at most once per 15 s per merchant), and continuously by the dedicated PM2 worker in production.
 
 ## Project layout
 
@@ -44,6 +44,7 @@ src/
     sms-headers.generated.ts  every header TRAI assigned to a bank (built from data/trai/)
     orders.ts             unique amounts, matching, idempotency, API views
     poller.ts             Gmail polling with a cross-instance throttle
+    tick.ts               one idempotent background-work cycle
     devices.ts            phone pairing, device tokens, bank SMS/notification ingest
     webhooks.ts           outbox, signing, delivery with backoff
     auth.ts               sessions, login codes, API keys (all stored hashed)
@@ -52,6 +53,8 @@ src/
 data/trai/                TRAI's register of SMS headers, and what it is used for
 prisma/                   schema and migrations
 tests/                    Vitest: parser, security, order matching, HTTP API, CORS
+ecosystem.config.cjs      PM2 processes for the API, worker and frontend
+deploy/                   Nginx reverse-proxy example
 ```
 
 ## Security
@@ -91,12 +94,64 @@ npm run typecheck
 npm run build
 ```
 
-## Deploying to Vercel
+## Deploying to a VM with PM2
+
+PM2 runs three fork-mode processes: the API, the Gmail/background worker, and the frontend. The worker
+checks Gmail, reconciles phone payments, retries webhooks and cleans expired data every 15 seconds.
+
+Keep the backend and frontend repositories as sibling directories named `paymentgateway` and
+`paymentgateway-frontend`.
+
+1. Install Node 24, Nginx, and PM2 on the VM (`npm install -g pm2`). Point the frontend and API DNS
+   records at the VM and allow inbound ports 80 and 443.
+2. In the backend, create `.env.production` from `.env.production.example`. Keep the current
+   `DATABASE_URL` and `ENCRYPTION_KEY` during migration; changing the encryption key disconnects Gmail
+   and makes existing webhook secrets unreadable.
+3. In the frontend, copy `.env.example` to `.env.production` and set `NEXT_PUBLIC_API_URL` to the public
+   API URL. This value is baked in during the build.
+4. Install, migrate and build:
+   ```bash
+   npm ci
+   npm run db:migrate
+   npm run build
+   npm --prefix ../paymentgateway-frontend ci
+   npm --prefix ../paymentgateway-frontend run build
+   ```
+5. Start all three processes and persist them across reboots:
+   ```bash
+   pm2 start ecosystem.config.cjs
+   pm2 save
+   pm2 startup
+   pm2 status
+   pm2 logs gateway-worker
+   ```
+   Run the root command printed by `pm2 startup` once.
+6. Configure Nginx from `deploy/nginx.conf.example`, then enable HTTPS with Certbot or your existing
+   certificate setup. The API listens on `127.0.0.1:3000`; the frontend listens on `127.0.0.1:5173`.
+7. Add `https://<api-domain>/auth/google/callback` to the Google OAuth client. If the API hostname
+   changes, update the production server URL in the Android and iOS apps.
+
+Deploy later updates with:
+
+```bash
+git pull
+git -C ../paymentgateway-frontend pull
+npm ci && npm run db:migrate && npm run build
+npm --prefix ../paymentgateway-frontend ci
+npm --prefix ../paymentgateway-frontend run build
+pm2 reload ecosystem.config.cjs --update-env
+```
+
+The PM2 configuration runs one instance of each process and restarts them at 512 MB (API), 256 MB
+(worker), and 384 MB (frontend). Do not scale the worker above one instance; the job operations are
+idempotent, but a single worker avoids unnecessary Gmail API traffic.
+
+## Legacy Vercel deployment
 
 1. **Framework preset: Next.js.** If the project was created for the old Express version, change it under Settings → Build and Deployment.
 2. Set the environment variables from `.env.example`. `FRONTEND_URL` must be the deployed frontend URL. `API_BASE_URL` can be omitted when using the Vercel production domain.
 3. **Migrations run automatically on production deploys.** `vercel.json` sets the build command to `npm run vercel-build`, which runs `prisma migrate deploy` (retrying once if another build holds the migration lock) before `next build`, but only when `VERCEL_ENV` is `production`. Preview deploys of other branches never change the database. This overrides any Build Command set in the Vercel dashboard. You can also migrate by hand with `npm run db:migrate`.
-4. **Cron (recommended).** Call `GET /api/cron/tick` every minute with `Authorization: Bearer $CRON_SECRET`.
+4. **Cron (recommended).** Call `GET /api/cron/tick` every minute with `Authorization: Bearer $CRON_SECRET`. The PM2 worker replaces this schedule.
    - **Vercel Pro:** add `"crons": [{ "path": "/api/cron/tick", "schedule": "* * * * *" }]` to `vercel.json`. Vercel sends `CRON_SECRET` automatically.
    - **Vercel Hobby** only allows daily crons. Use an external scheduler instead (cron-job.org, GitHub Actions, Upstash QStash) with that header.
    - Without a cron, payments are still detected while a checkout page is open, but webhook retries and cleanup only happen when the cron runs.
