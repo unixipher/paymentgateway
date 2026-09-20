@@ -26,7 +26,7 @@ describe('credit alerts', () => {
   test('HDFC style UPI credit', () => {
     expect(parseCreditAlert(`Dear Customer, Rs.99.07 has been credited to your account **1234 by VPA rahul.k@okaxis
       RAHUL KUMAR on 17-09-26. Your UPI transaction reference number is 425112345678. Warm Regards, HDFC Bank`))
-      .toEqual({ ok: true, amountPaise: 9907, utr: '425112345678', payerVpa: 'rahul.k@okaxis', payerName: null });
+      .toEqual({ ok: true, amountPaise: 9907, utr: '425112345678', payerVpa: 'rahul.k@okaxis', payerName: 'RAHUL KUMAR' });
   });
 
   test('ICICI style credit with UPI/ info string and balance after the amount', () => {
@@ -205,4 +205,11 @@ View balance: https://kotak811.com/mbapp/pay
 For any queries or assistance, please contact our customer care at 1800 4100.`;
   expect(parseCreditAlert(email)).toEqual({ ok: true, amountPaise: 102, utr: '314961406046', payerVpa: null, payerName: 'MRINMOY HALDER' });
   expect(parseCreditAlert('A/C X1234 credited by 10.01 on date 18Sep26 trf from AMAL DAS Refno 425100000002. -SBI')).toMatchObject({ payerName: 'AMAL DAS' });
+});
+
+test('bank-agnostic SMS format names the payer after "from"', () => {
+  expect(parseCreditAlert('Rs.250.00 credited to A/c XX4321 from PRIYA SHAH on 20-Sep-26. UPI Ref 425100001112.'))
+    .toMatchObject({ ok: true, payerName: 'PRIYA SHAH' });
+  expect(parseCreditAlert('INR 250 credited to A/c XX4321. Info: UPI/P2A/425100001113/Payment from PhonePe.'))
+    .toMatchObject({ ok: true, payerName: null });
 });

@@ -91,19 +91,24 @@ function findUtr(text: string): string | null {
 
 // The name that follows a label, up to the next label or punctuation.
 const NAME = String.raw`([A-Za-z][A-Za-z .']{1,60}?)`;
-const NAME_END = String.raw`(?=\s+(?:UPI|RRN|Ref|Refno|Reference|Date|Amount|A\/c|Account|VPA|Info|View|Balance|Avl|Available)\b|\s*[,;:(\-]|\s*$)`;
+const NAME_END = String.raw`(?=\s+(?:UPI|RRN|Ref|Refno|Reference|Date|On|Amount|A\/c|Account|VPA|Info|View|Balance|Avl|Available)\b|\s*[,;:(\-]|\s*$)`;
 const PAYER_NAME_PATTERNS = [
   // Kotak/Kotak811 email: "Amount: ₹1.02 Sender: MRINMOY HALDER UPI Reference Number (RRN): …"
   new RegExp(String.raw`\b(?:Sender|Remitter|Payer)(?:'s)?(?:\s+Name)?\s*[:\-]\s*${NAME}${NAME_END}`, 'i'),
-  // SBI SMS: "credited by 10.01 on date 18Sep26 trf from PAYER NAME Refno 425100000002"
-  new RegExp(String.raw`\btrf\s+from\s+${NAME}${NAME_END}`, 'i'),
+  // HDFC SMS: "by VPA rahul.k@okaxis RAHUL KUMAR on 17-09-26"
+  new RegExp(String.raw`\b(?:by|from)\s+VPA\s+[a-z0-9][a-z0-9._-]*@[a-z][a-z0-9]*\s+${NAME}(?=\s+on\b)`, 'i'),
+  // Bank SMS: "... from PAYER NAME Refno ..." or "... from PAYER NAME on ..."
+  new RegExp(String.raw`\bfrom\s+(?!VPA\b)${NAME}${NAME_END}`, 'i'),
 ];
+
+// These can follow "from" in a credit alert but identify the rail/app/account, not a person.
+const NON_PAYER_NAMES = /^(?:UPI|IMPS|NEFT|RTGS|PHONEPE|GOOGLE PAY|GPAY|PAYTM|BHIM|YOUR ACCOUNT|YOUR A\/C)$/i;
 
 /** The account holder who sent the money, as the bank prints it, if the alert says. */
 function findPayerName(text: string): string | null {
   for (const pattern of PAYER_NAME_PATTERNS) {
-    const name = text.match(pattern)?.[1]?.replace(/\s+/g, ' ').trim();
-    if (name && /[A-Za-z]{2}/.test(name)) return name;
+    const name = text.match(pattern)?.[1]?.replace(/\s+/g, ' ').trim().replace(/[ .]+$/, '');
+    if (name && /[A-Za-z]{2}/.test(name) && !NON_PAYER_NAMES.test(name)) return name;
   }
   return null;
 }
