@@ -9,7 +9,7 @@ export const maxDuration = 60;
 
 /**
  * Background work: check Gmail for merchants with open orders, retry webhooks, delete expired data.
- * Call every minute with `Authorization: Bearer <CRON_SECRET>` (Vercel Cron sends this automatically).
+ * Optional HTTP trigger for self-hosted schedulers. The bundled worker normally performs this work.
  */
 export const GET = handler(async (req: NextRequest) => {
   const secret = config().cronSecret;

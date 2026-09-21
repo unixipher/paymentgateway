@@ -4,15 +4,8 @@ try {
   // no .env
 }
 
-export const hasDatabase = Boolean(process.env.DATABASE_URL);
-
-if (process.env.DATABASE_URL) {
-  const url = new URL(process.env.DATABASE_URL);
-  url.searchParams.set('schema', 'gateway_test');
-  process.env.DATABASE_URL = url.toString();
-} else {
-  process.env.DATABASE_URL = 'postgres://unused@localhost/unused';
-}
+export const hasDatabase = true;
+process.env.DATABASE_URL = 'file:./data/test.db';
 
 // Fixed test values, independent of the real .env secrets.
 process.env.ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');

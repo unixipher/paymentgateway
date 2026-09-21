@@ -10,7 +10,7 @@ import { nameMatchesAlert, namesConflict } from './names';
 import { enqueueWebhook, scheduleDelivery } from './webhooks';
 
 const MAX_BASE_PAISE = 99_999_00; // UPI P2P limit is ₹1,00,000 and we add up to 99 paise
-// Prisma's defaults (2s to get a connection, 5s to finish) are too tight for a remote database under bursts.
+// Keep transactions bounded. SQLite serialises writes in a self-hosted process.
 const TXN_OPTIONS = { maxWait: 15_000, timeout: 15_000 };
 const ago = (ms: number, from = Date.now()) => new Date(from - ms);
 
@@ -128,8 +128,6 @@ export async function createOrder(merchant: Merchant, input: CreateOrderInput): 
   const now = Date.now();
   try {
     return await prisma.$transaction(async (tx) => {
-      // Serialise allocation per merchant so two simultaneous requests can't be handed the same amount.
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${merchant.id}))::text`;
       const amountPaise = await allocateAmount(tx, merchant.id, basePaise, now, input.payerName ?? null);
       if (!amountPaise) {
         const hint = input.payerName ? '' : ' Passing payer_name lets more payers share an amount.';
@@ -251,8 +249,7 @@ export async function recordBankCredit(merchantId: string, credit: BankCredit) {
     txn = await prisma.$transaction(async (tx) => {
       // One payment is often reported twice: by the bank's email and by its SMS. With the same UTR the
       // unique index catches it. When one of them has no UTR, the same amount from the other channel
-      // within a few minutes is the same payment. The lock stops both being recorded at the same moment.
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`credit:${merchantId}`}))::text`;
+      // within a few minutes is the same payment. SQLite serialises the transaction's writes locally.
       const t = credit.receivedAt.getTime();
       const nearby = await tx.bankTxn.findMany({
         where: {
@@ -466,7 +463,11 @@ export interface FailedPaymentReport {
 
 /** Remembers the reference number of a failed or reversed payment so it can't be claimed. */
 export async function recordFailedPayment(merchantId: string, failure: FailedPaymentReport) {
-  await prisma.failedPayment.createMany({ data: [{ merchantId, ...failure }], skipDuplicates: true });
+  await prisma.failedPayment.upsert({
+    where: { merchantId_utr: { merchantId, utr: failure.utr } },
+    create: { merchantId, ...failure },
+    update: {},
+  });
 }
 
 /**

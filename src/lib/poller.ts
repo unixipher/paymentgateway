@@ -14,16 +14,17 @@ async function processMessage(merchant: Merchant, msg: GmailMessage) {
   const headers = msg.payload?.headers ?? [];
   const receivedAt = new Date(Number(msg.internalDate));
   const log = (verdict: string) =>
-    prisma.gmailMessage.createMany({
-      data: [{
+    prisma.gmailMessage.upsert({
+      where: { merchantId_gmailMessageId: { merchantId: merchant.id, gmailMessageId: msg.id } },
+      create: {
         merchantId: merchant.id,
         gmailMessageId: msg.id,
         receivedAt,
         fromAddr: header(headers, 'From').slice(0, 300),
         subject: header(headers, 'Subject').slice(0, 300),
         verdict,
-      }],
-      skipDuplicates: true,
+      },
+      update: {},
     });
 
   const sender = verifySender(headers, config().trustedBankDomains, merchant.bankKey);
@@ -112,7 +113,7 @@ async function merchantsWithOpenOrders(now: number, merchantId?: string) {
 
 /**
  * Checks one merchant's Gmail if it hasn't been checked within the poll interval. The conditional
- * update lets only one caller per interval through, across all serverless instances.
+ * update lets only one caller per interval through within the self-hosted installation.
  */
 export async function pollIfDue(merchantId: string): Promise<number> {
   const now = Date.now();

@@ -4,7 +4,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
 }
 
 enum OrderStatus {
@@ -94,32 +94,32 @@ model LoginCode {
 }
 
 model Order {
-  id             String      @id
-  merchantId     String      @map("merchant_id")
+  id                String      @id
+  merchantId        String      @map("merchant_id")
   /// What the merchant asked for.
-  basePaise      Int         @map("base_paise")
+  basePaise         Int         @map("base_paise")
   /// basePaise plus the unique paise offset the payer must pay.
-  amountPaise    Int         @map("amount_paise")
-  note           String?
-  redirectUrl    String?     @map("redirect_url")
-  metadata       Json?
-  idempotencyKey String?     @map("idempotency_key")
+  amountPaise       Int         @map("amount_paise")
+  note              String?
+  redirectUrl       String?     @map("redirect_url")
+  metadata          Json?
+  idempotencyKey    String?     @map("idempotency_key")
   /// "failed" (no payment in time) is computed from expiresAt; only pending/paid/cancelled are stored.
-  status         OrderStatus @default(pending)
-  claimedUtr     String?     @map("claimed_utr")
+  status            OrderStatus @default(pending)
+  claimedUtr        String?     @map("claimed_utr")
   /// Name on the bank account the payer said they'd pay from. Lets payers with clearly different
   /// names share one amount once all 99 paise amounts for a price are taken.
-  payerName      String?     @map("payer_name")
+  payerName         String?     @map("payer_name")
   /// Set once the order.failed webhook has been queued, so it is sent at most once.
-  failureNotifiedAt DateTime? @map("failure_notified_at")
-  createdAt      DateTime    @default(now()) @map("created_at")
-  updatedAt      DateTime    @default(now()) @updatedAt @map("updated_at")
+  failureNotifiedAt DateTime?   @map("failure_notified_at")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @default(now()) @updatedAt @map("updated_at")
   /// Until the payer opens the link: how long the link stays valid. From then on: the end of the payment timer.
-  expiresAt      DateTime    @map("expires_at")
+  expiresAt         DateTime    @map("expires_at")
   /// When the payer first opened the checkout link, which starts the payment timer.
-  openedAt       DateTime?   @map("opened_at")
-  paidAt         DateTime?   @map("paid_at")
-  cancelledAt    DateTime?   @map("cancelled_at")
+  openedAt          DateTime?   @map("opened_at")
+  paidAt            DateTime?   @map("paid_at")
+  cancelledAt       DateTime?   @map("cancelled_at")
 
   merchant          Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   txn               BankTxn?
@@ -141,27 +141,27 @@ enum Channel {
 
 /// A verified credit parsed from a bank alert: an email from Gmail, or an SMS/notification from a paired phone.
 model BankTxn {
-  id          String   @id @default(cuid())
-  merchantId  String   @map("merchant_id")
-  channel     Channel  @default(email)
+  id                   String    @id @default(cuid())
+  merchantId           String    @map("merchant_id")
+  channel              Channel   @default(email)
   /// Gmail message id, or `<deviceId>:<id the phone gave the message>`.
-  messageId   String   @map("message_id")
-  amountPaise Int      @map("amount_paise")
-  utr         String?
-  payerVpa    String?  @map("payer_vpa")
+  messageId            String    @map("message_id")
+  amountPaise          Int       @map("amount_paise")
+  utr                  String?
+  payerVpa             String?   @map("payer_vpa")
   /// The sender's name as the bank printed it in the alert.
-  payerName   String?  @map("payer_name")
+  payerName            String?   @map("payer_name")
   /// Who sent the alert: the email domain, SMS sender (e.g. VM-HDFCBK-S) or app package.
-  bankDomain  String   @map("bank_domain")
-  receivedAt  DateTime @map("received_at")
+  bankDomain           String    @map("bank_domain")
+  receivedAt           DateTime  @map("received_at")
   /// When a DKIM/DMARC-verified bank email corroborated this credit. A paired phone can forge an
   /// SMS but not the bank's email, so a credit no email confirms is only as good as the phone.
-  emailConfirmedAt DateTime? @map("email_confirmed_at")
+  emailConfirmedAt     DateTime? @map("email_confirmed_at")
   /// Set once the payment.unverified webhook has been queued, so it is sent at most once.
   unverifiedNotifiedAt DateTime? @map("unverified_notified_at")
   /// A bank credit can pay at most one order.
-  orderId        String?  @unique @map("order_id")
-  createdAt      DateTime @default(now()) @map("created_at")
+  orderId              String?   @unique @map("order_id")
+  createdAt            DateTime  @default(now()) @map("created_at")
 
   merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   order    Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
@@ -176,7 +176,7 @@ model BankTxn {
 /// A failed or reversed UPI payment reported in a bank alert. Its reference number can never pay an
 /// order, so a payer who submits it is told the payment failed instead of waiting forever.
 model FailedPayment {
-  merchantId     String   @map("merchant_id")
+  merchantId  String   @map("merchant_id")
   utr         String
   messageId   String   @map("message_id")
   amountPaise Int?     @map("amount_paise")
@@ -209,14 +209,14 @@ model GmailMessage {
 /// A merchant's phone running the Android app, which forwards bank SMS and notifications as they arrive.
 /// Only the SHA-256 of its token is stored; deleting the row revokes it.
 model Device {
-  id          String    @id
-  merchantId  String    @map("merchant_id")
-  name        String
-  platform    String
-  appVersion  String?   @map("app_version")
-  tokenHash   String    @unique @map("token_hash")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  lastSeenAt  DateTime? @map("last_seen_at")
+  id         String    @id
+  merchantId String    @map("merchant_id")
+  name       String
+  platform   String
+  appVersion String?   @map("app_version")
+  tokenHash  String    @unique @map("token_hash")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastSeenAt DateTime? @map("last_seen_at")
 
   merchant Merchant        @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   messages DeviceMessage[]

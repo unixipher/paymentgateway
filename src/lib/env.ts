@@ -8,23 +8,24 @@ const csv = z
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  DATABASE_URL: z.string().min(1),
+  /** Local SQLite file. Relative paths are resolved from the backend working directory. */
+  DATABASE_URL: z.string().startsWith('file:').default('file:./data/paymentgateway.db'),
   GOOGLE_CLIENT_ID: z.string().min(1),
   GOOGLE_CLIENT_SECRET: z.string().min(1),
   ENCRYPTION_KEY: z
     .string()
     .refine((v) => Buffer.from(v, 'base64').length === 32, 'must be 32 random bytes, base64 encoded'),
-  /** Public URL of this backend. Defaults to the Vercel production URL, then localhost. */
+  /** Public URL of this self-hosted backend. */
   API_BASE_URL: z.url().optional(),
   VERCEL_PROJECT_PRODUCTION_URL: z.string().optional(),
   /** The dashboard frontend. Google sign-in redirects back here. */
   FRONTEND_URL: z.url(),
   /** Extra origins allowed to call the authenticated API from a browser (the frontend is always allowed). */
   CORS_ORIGINS: csv,
-  /** Required to call /api/cron/tick. Vercel Cron sends it automatically as a Bearer token. */
+  /** Required only when an external scheduler calls /api/cron/tick. */
   CRON_SECRET: z.string().min(16).optional(),
   POLL_INTERVAL_SECONDS: z.coerce.number().int().min(5).default(15),
-  /** Delay between background worker cycles when running outside a serverless platform. */
+  /** Delay between self-hosted background worker cycles. */
   WORKER_INTERVAL_SECONDS: z.coerce.number().int().min(5).max(3600).default(15),
   /** How long the payer has to pay, counted from when they open the checkout link. */
   ORDER_TTL_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(2),

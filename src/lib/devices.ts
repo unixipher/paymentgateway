@@ -163,8 +163,9 @@ async function processMessage(device: Device & { merchant: Merchant }, msg: Inco
     return `credit ₹${formatRupees(alert.amountPaise)}${alert.utr ? `, UTR ${alert.utr}` : ''}`;
   })();
 
-  await prisma.deviceMessage.createMany({
-    data: [{
+  await prisma.deviceMessage.upsert({
+    where: { id },
+    create: {
       id,
       merchantId: device.merchantId,
       deviceId: device.id,
@@ -173,8 +174,8 @@ async function processMessage(device: Device & { merchant: Merchant }, msg: Inco
       receivedAt,
       deliveredAt,
       verdict,
-    }],
-    skipDuplicates: true,
+    },
+    update: {},
   });
   return { id: msg.id, status: statusOf(verdict), verdict, order_id: orderId };
 }

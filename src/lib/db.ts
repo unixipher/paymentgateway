@@ -1,21 +1,11 @@
-import { PrismaPg } from '@prisma/adapter-pg';
+import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaClient } from '@/generated/prisma/client';
 import { config } from './env';
 
 export { Prisma } from '@/generated/prisma/client';
 
-/** Postgres schema from `?schema=` in DATABASE_URL (default `public`). */
-export function dbSchema(): string {
-  const schema = new URL(config().databaseUrl).searchParams.get('schema') ?? 'public';
-  if (!/^[a-z_][a-z0-9_]*$/i.test(schema)) throw new Error(`Invalid schema name in DATABASE_URL: ${schema}`);
-  return schema;
-}
-
 function createClient() {
-  // `?schema=` is a Prisma convention the pg driver doesn't understand, so pass it separately.
-  const url = new URL(config().databaseUrl);
-  url.searchParams.delete('schema');
-  return new PrismaClient({ adapter: new PrismaPg({ connectionString: url.toString() }, { schema: dbSchema() }) });
+  return new PrismaClient({ adapter: new PrismaBetterSqlite3({ url: config().databaseUrl }) });
 }
 
 // Reuse one client per process (and across hot reloads in development).

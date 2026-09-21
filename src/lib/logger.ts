@@ -6,7 +6,7 @@ function serialize(value: unknown): unknown {
   return value;
 }
 
-// One JSON object per line, which Vercel and most log drains index as structured fields.
+// One JSON object per line, which PM2 and most log drains can index as structured fields.
 function write(level: Level, msg: string, fields: Fields = {}) {
   const entry: Fields = { level, msg, time: new Date().toISOString() };
   for (const [key, value] of Object.entries(fields)) entry[key] = serialize(value);

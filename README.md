@@ -1,6 +1,11 @@
 # Payment Gateway (backend)
 
-UPI payments to a merchant's own UPI ID, verified automatically by reading their bank's credit alert emails from Gmail, and instantly from bank SMS through the Android app ([paymentgateway-android](../paymentgateway-android)). This repo is the backend only: a Next.js (App Router, TypeScript) API. The dashboard and checkout UI live in a separate frontend repo.
+> [!IMPORTANT]
+> **Independent open-source software project.** This repository is a reference implementation and does not claim to be an RBI-authorised payment aggregator, PSP, TPAP, bank, or NPCI-certified service. It is not affiliated with RBI, NPCI, BHIM, or any bank. See [LEGAL.md](LEGAL.md) before using it with real accounts or payments.
+
+Self-hosted UPI checkout and reconciliation software for a merchant's own UPI ID. Data is stored in a local SQLite file on the operator's machine. Payments can be reconciled from the operator's bank-alert emails or bank SMS forwarded by their paired Android phone ([paymentgateway-android](../paymentgateway-android)). This repository is the backend; the dashboard and checkout UI live in a separate frontend repository.
+
+There is no hosted account or shared database supplied by this project. Each operator installs their own copy, controls their own database and credentials, and is responsible for their deployment and use.
 
 **API reference for the frontend and merchants: [docs/API.md](docs/API.md)**
 
@@ -51,7 +56,7 @@ src/
     crypto.ts             AES-256-GCM secrets at rest, HMAC signing
     env.ts                validated configuration
 data/trai/                TRAI's register of SMS headers, and what it is used for
-prisma/                   schema and migrations
+sqlite/                   active SQLite schema and migration snapshot
 tests/                    Vitest: parser, security, order matching, HTTP API, CORS
 ecosystem.config.cjs      PM2 processes for the API, worker and frontend
 deploy/                   Nginx reverse-proxy example
@@ -64,7 +69,7 @@ deploy/                   Nginx reverse-proxy example
 - **OAuth:** state is in a signed, short-lived, HttpOnly cookie. Only relative redirect paths are allowed, and a verified Google email is required.
 - **Frontend handoff:** a single-use 2-minute code, exchanged for a Bearer token. There are no cross-site cookies.
 - **Isolation:** every row belongs to one merchant, and every query filters by it.
-- **Rate limits:** stored in Postgres, so they hold across serverless instances. Sign-in, checkout status, QR codes, UTR claims, order creation and scans are all limited.
+- **Rate limits:** stored in the local SQLite database. Sign-in, checkout status, QR codes, UTR claims, order creation and scans are all limited.
 - **Webhooks:** HMAC-SHA256 signatures that include a timestamp, and in production only public HTTPS targets are allowed.
 - **The merchant's bank:** a merchant can name the bank their UPI ID pays into, and an alert from any other bank is then refused, by email and SMS alike.
 - **Checked twice:** a payment a phone reported is looked at again about 45 minutes later. A phone can forge an SMS, but not the bank's DKIM-signed email, so a payment no email ever confirmed raises `payment.unverified` and is marked in the dashboard. It is flagged, not undone.
@@ -73,23 +78,23 @@ deploy/                   Nginx reverse-proxy example
 
 ## Setup
 
-Requirements: Node 24, a Postgres database (e.g. [Prisma Postgres](https://www.prisma.io/postgres)), and a Google Cloud project.
+Requirements: Node 24 and a Google Cloud project. SQLite is embedded; no external database service is required.
 
 1. **Google Cloud Console**
    - Enable the **Gmail API**.
    - **Google Auth Platform → Audience:** External. While in Testing, add every Gmail account that will sign in as a test user (Testing-mode refresh tokens expire after 7 days).
    - **Clients → Web application.** Authorized redirect URIs: `http://localhost:3000/auth/google/callback` and `https://<your-backend-domain>/auth/google/callback`.
 2. **Environment:** copy `.env.example` to `.env` and fill it in. Each variable is documented in that file.
-3. Install, migrate and run:
+3. Install, create the local database and run:
    ```bash
    npm install          # also generates the Prisma client
-   npm run db:migrate
+   npm run db:setup     # creates data/paymentgateway.db
    npm run dev          # http://localhost:3000
    ```
 4. Merchants enable **email alerts for UPI credits** in their bank's netbanking, sent to the Gmail account they sign in with. Forwarded emails fail DKIM and are ignored.
 
 ```bash
-npm test            # Vitest. Database tests use DATABASE_URL but run in a separate `gateway_test` schema.
+npm test            # Vitest uses an isolated data/test.db file.
 npm run typecheck
 npm run build
 ```
@@ -104,9 +109,9 @@ Keep the backend and frontend repositories as sibling directories named `payment
 
 1. Install Node 24, Nginx, and PM2 on the VM (`npm install -g pm2`). Point the frontend and API DNS
    records at the VM and allow inbound ports 80 and 443.
-2. In the backend, create `.env.production` from `.env.production.example`. Keep the current
-   `DATABASE_URL` and `ENCRYPTION_KEY` during migration; changing the encryption key disconnects Gmail
-   and makes existing webhook secrets unreadable.
+2. In the backend, create `.env.production` from `.env.production.example`. Keep the `data/` directory
+   on persistent local storage and retain the same `ENCRYPTION_KEY`; changing it disconnects Gmail and
+   makes existing webhook secrets unreadable.
 3. In the frontend, copy `.env.example` to `.env.production` and set `NEXT_PUBLIC_API_URL` to the public
    API URL. This value is baked in during the build.
 4. Install, migrate and build:
@@ -146,25 +151,11 @@ The PM2 configuration runs one instance of each process and restarts them at 512
 (worker), and 384 MB (frontend). Do not scale the worker above one instance; the job operations are
 idempotent, but a single worker avoids unnecessary Gmail API traffic.
 
-## Legacy Vercel deployment
+## Vercel is not supported
 
-1. **Framework preset: Next.js.** If the project was created for the old Express version, change it under Settings → Build and Deployment.
-2. Set the environment variables from `.env.example`. `FRONTEND_URL` must be the deployed frontend URL. `API_BASE_URL` can be omitted when using the Vercel production domain.
-3. **Migrations run automatically on production deploys.** `vercel.json` sets the build command to `npm run vercel-build`, which runs `prisma migrate deploy` (retrying once if another build holds the migration lock) before `next build`, but only when `VERCEL_ENV` is `production`. Preview deploys of other branches never change the database. This overrides any Build Command set in the Vercel dashboard. You can also migrate by hand with `npm run db:migrate`.
-4. **Cron (recommended).** Call `GET /api/cron/tick` every minute with `Authorization: Bearer $CRON_SECRET`. The PM2 worker replaces this schedule.
-   - **Vercel Pro:** add `"crons": [{ "path": "/api/cron/tick", "schedule": "* * * * *" }]` to `vercel.json`. Vercel sends `CRON_SECRET` automatically.
-   - **Vercel Hobby** only allows daily crons. Use an external scheduler instead (cron-job.org, GitHub Actions, Upstash QStash) with that header.
-   - Without a cron, payments are still detected while a checkout page is open, but webhook retries and cleanup only happen when the cron runs.
-
-### Upgrading an existing Express deployment
-
-The migration `20260918000000_production_backend` keeps existing merchants, orders and transactions. It converts plaintext API keys to hashes, so existing keys keep working. After deploying it, run once:
-
-```bash
-node --env-file=.env scripts/migrate-legacy-secrets.ts   # needs the old SESSION_SECRET and the new ENCRYPTION_KEY
-```
-
-This re-encrypts Gmail tokens and webhook secrets with `ENCRYPTION_KEY`. You can then remove `SESSION_SECRET` and delete the script.
+The backend uses a local SQLite file and must run on a machine or container with persistent disk.
+Serverless hosts with ephemeral filesystems, including Vercel, are not supported. Run the API and its
+worker on the same self-hosted machine using the supplied PM2 configuration.
 
 ## Limitations
 

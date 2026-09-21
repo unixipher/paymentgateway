@@ -1,6 +1,6 @@
 // Dashboard numbers, shared by the web dashboard (session) and the phone app (device token).
 import type { BankTxn, Order } from '@/generated/prisma/client';
-import { Prisma, dbSchema, prisma } from './db';
+import { prisma } from './db';
 import { formatRupees } from './money';
 
 const IST_OFFSET_MS = 330 * 60_000;
@@ -14,7 +14,7 @@ export async function merchantStats(merchantId: string, now = Date.now()) {
   const today = istDayStart(now);
   const weekStart = new Date(today.getTime() - 6 * DAY_MS);
 
-  const [paidToday, openNow, paidWeek, unpaidWeek, days] = await Promise.all([
+  const [paidToday, openNow, paidWeek, unpaidWeek, weeklyOrders] = await Promise.all([
     prisma.order.aggregate({
       where: { merchantId, status: 'paid', paidAt: { gte: today } },
       _sum: { amountPaise: true },
@@ -23,15 +23,22 @@ export async function merchantStats(merchantId: string, now = Date.now()) {
     prisma.order.count({ where: { merchantId, status: 'pending', expiresAt: { gt: new Date(now) } } }),
     prisma.order.count({ where: { merchantId, status: 'paid', createdAt: { gte: weekStart } } }),
     prisma.order.count({ where: { merchantId, status: 'pending', createdAt: { gte: weekStart }, expiresAt: { lte: new Date(now) } } }),
-    prisma.$queryRaw<{ day: string; paise: bigint; count: bigint }[]>`
-      SELECT to_char(paid_at + interval '330 minutes', 'YYYY-MM-DD') AS day, SUM(amount_paise) AS paise, COUNT(*) AS count
-      FROM ${Prisma.raw(`"${dbSchema()}".orders`)}
-      WHERE merchant_id = ${merchantId} AND status = 'paid' AND paid_at >= ${weekStart}
-      GROUP BY 1`,
+    prisma.order.findMany({
+      where: { merchantId, status: 'paid', paidAt: { gte: weekStart } },
+      select: { paidAt: true, amountPaise: true },
+    }),
   ]);
 
   // Success rate: paid ÷ (paid + ran out of time). Open and cancelled orders don't count.
-  const byDay = new Map(days.map((row) => [row.day, row]));
+  const byDay = new Map<string, { paise: number; count: number }>();
+  for (const order of weeklyOrders) {
+    if (!order.paidAt) continue;
+    const day = new Date(order.paidAt.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+    const current = byDay.get(day) ?? { paise: 0, count: 0 };
+    current.paise += order.amountPaise;
+    current.count += 1;
+    byDay.set(day, current);
+  }
 
   return {
     today: {
@@ -44,7 +51,7 @@ export async function merchantStats(merchantId: string, now = Date.now()) {
     days: Array.from({ length: 7 }, (_, i) => {
       const date = new Date(weekStart.getTime() + IST_OFFSET_MS + i * DAY_MS).toISOString().slice(0, 10);
       const row = byDay.get(date);
-      return { date, collected: formatRupees(Number(row?.paise ?? 0)), collected_paise: Number(row?.paise ?? 0), payments: Number(row?.count ?? 0) };
+      return { date, collected: formatRupees(row?.paise ?? 0), collected_paise: row?.paise ?? 0, payments: row?.count ?? 0 };
     }),
   };
 }

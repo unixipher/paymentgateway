@@ -4,11 +4,11 @@ import { defineConfig } from 'prisma/config';
 try {
   process.loadEnvFile();
 } catch {
-  // no .env file (e.g. on Vercel, where variables come from the project settings)
+  // no .env file (for example, when variables are supplied by the process manager)
 }
 
 export default defineConfig({
-  schema: 'prisma/schema.prisma',
-  migrations: { path: 'prisma/migrations' },
-  datasource: { url: process.env.DATABASE_URL ?? '' },
+  schema: 'sqlite/schema.prisma',
+  migrations: { path: 'sqlite' },
+  datasource: { url: process.env.DATABASE_URL ?? 'file:./data/paymentgateway.db' },
 });
